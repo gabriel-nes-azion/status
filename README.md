@@ -1,14 +1,15 @@
 # status
 
-A terminal dashboard that plots local system resources and the latency of a
-remote endpoint on the same screen, on shared ASCII timelines, and is driven by
-Claude-style slash commands typed inside the TUI.
+A terminal dashboard that plots local system resources, the latency of a remote
+endpoint, and the CPU share of the services running on the machine — on shared
+ASCII timelines, driven by Claude-style slash commands typed inside the TUI.
 
-Everything is on one screen on purpose: the point is to watch local pressure and
-remote latency at the same time and see which one moved first.
+Everything relevant is on one screen on purpose: the point is to watch local
+pressure, remote latency and per-service load at the same time and see which one
+moved first.
 
 ```
- STATUS  ·  https://status.azion.app/  ·  checks 5s  ·  sys 1s  ·  window 1m40s/8m20s        ▲ 1 ALERT  09:24:34
+ STATUS  ·  MAIN(9)/SERVICES(4)  ·  https://status.azion.app/  ·  checks 5s  ·  sys 1s   ▲ 1 ALERT  09:24:34
 
  MACHINE ──────────────────────────────────────────────────────────────────────────────────
  ● CPU                 ⌃100% │ ╌  ▁▁▂▂▃▃▄▃▃▃▂▂▁▁ ╌  ╌  ╌  ╌  ╌  ╌ ▁▁▂▂▃▃▃▄▃▃▂▂▁▁  ╌  ╌  ╌
@@ -27,6 +28,23 @@ remote latency at the same time and see which one moved first.
  │ ❯ /interval 2s                                                                           │
  ╰──────────────────────────────────────────────────────────────────────────────────────────╯
    /interval <duration>   how often the network checks run (default 5s)
+```
+
+`Shift+Tab` switches to the services screen:
+
+```
+ STATUS  ·  MAIN(9)/SERVICES(4)  ·  https://status.azion.app/  ·  checks 5s  ·  sys 1s   ▲ 1 ALERT (+2 unseen)
+
+ SERVICES ─────────────────────────────────────────────────────────────────────────────────
+ ● NODE                ⌃100% │                    ▁▃▃▄▄▄▃▂▁                    ▁▁▃▃▄▄▄▃▂▁
+   32.4%           thr 50.0% │                ▂▄▆███████████▆▄▂             ▂▄▆███████████
+   avg 59% · max 93%         │            ▁▃▅██████████████████▇▅▂▁     ▁▃▅█████████████████
+   3 pid · 4.96 cores · 892M │ ███▇▅▄▃▂▂▁▂▂▃▄▆████████████████████████▄▆████████████████████
+                             │ ████████████████████████████████████████████████████████████
+ ● REDIS-SERVER        ⌃100% │                                                       ░░░░░
+   FAIL            thr 50.0% │                                                       ░░░░░
+   avg 4% · max 6%        ✕5 │ ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌ ░░░░░
+   ✕ no process matching "r… │ ▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁░░░░░
 ```
 
 ## What it measures
@@ -52,9 +70,19 @@ Nine charts, all visible at once, all plotted as timelines, in two sections.
 | `TTFB` | time to the first response byte | |
 | `REQUEST` | time to a fully read response | same request as TTFB |
 
+**Services** — process groups you pick, on the second screen:
+
+| Chart | Source | Notes |
+| --- | --- | --- |
+| one per service | CPU share of every matching process | detail line shows pid count, cores and RSS |
+
+Nothing is charted there until you add something. `/discover` scans the machine
+and lets you pick from a ranked list; `/service add` does it by hand.
+
 Use `/show` to hide the charts you are not watching; hidden charts keep
 collecting, so unhiding one restores its history instead of starting blank, and
-an alert on a hidden chart is still counted in the top bar.
+an alert on a hidden chart — or on the screen you are not looking at — is still
+counted in the top bar.
 
 Local metrics are sampled on their own faster cadence (`/sysinterval`, default
 1s); the four network checks run on the configurable check interval
@@ -84,9 +112,12 @@ Type `/` to open the completion popup. `Tab` accepts the highlighted entry;
 | `/sysinterval <duration>` | how often local system metrics are sampled |
 | `/timeout <dns\|ping\|ttfb\|request\|all> <duration>` | set a per-check timeout |
 | `/timeouts` | show every configured timeout |
-| `/threshold <metric> <value>` | alert level that turns a chart red (`0` disables) |
+| `/threshold <chart> <value>` | alert level that turns a chart red (`0` disables) |
 | `/thresholds` | show every configured threshold |
-| `/show [metric\|section\|all\|none]` | pick which charts are displayed; no argument opens the picker |
+| `/show [chart\|section\|all\|none]` | pick which charts are displayed; no argument opens the picker |
+| `/screen [main\|services]` | switch screens; no argument cycles, as `Shift+Tab` does |
+| `/discover [filter]` | scan the machine for services and pick which to chart |
+| `/service <add\|rm\|list> [name] [match]` | manage the charted services by hand |
 | `/disk <mountpoint>` | which filesystem the disk usage panel reports |
 | `/net <interface\|all>` | which interface the network panel sums |
 | `/pingmode <auto\|icmp\|tcp>` | latency transport |
@@ -99,13 +130,20 @@ Type `/` to open the completion popup. `Tab` accepts the highlighted entry;
 | `/reset` | restore built-in defaults |
 | `/quit` | exit |
 
-Keys: `Tab` complete · `↑`/`↓` completions, or command history when the popup is
-closed · `Esc` dismiss a panel or clear the prompt · `Ctrl+R` run the checks now
-· `Ctrl+L` clear history · `Ctrl+C` quit.
+Keys: `Shift+Tab` switch screens · `Tab` complete · `↑`/`↓` completions, or
+command history when the popup is closed · `Esc` dismiss a panel or clear the
+prompt · `Ctrl+R` sample everything now · `Ctrl+L` clear history · `Ctrl+C` quit.
 
 In the `/show` picker: `↑`/`↓` move · `Space` toggle · `a` show all · `n` hide
-all · `Esc` close. The picker owns the keyboard while it is open, so nothing
-leaks into the prompt behind it.
+all · `Esc` close. In the `/discover` list: `↑`/`↓` move · `Space` select · `l`
+select everything with a listening socket · `Enter` chart the selection · `Esc`
+cancel. Both lists own the keyboard while open, so nothing leaks into the prompt
+behind them, and the prompt greys out to say so.
+
+A panel taller than the terminal (`/help`, `/config`) scrolls with `↑`/`↓` and
+`PgUp`/`PgDn`. Any other key closes it, and that key is swallowed rather than
+typed onto the prompt — except `/`, which takes you straight from reading to
+typing the next command.
 
 ### Value formats
 
@@ -114,13 +152,22 @@ leaks into the prompt behind it.
 
 Durations take a unit (`500ms`, `2s`, `1m`); a bare number means seconds.
 
-Thresholds are read in the unit of their metric:
+`/threshold` and `/show` take any chart name: a built-in metric (`cpu`, `ttfb`)
+or a service (`nginx`, or the fully qualified `service:nginx`). A service cannot
+shadow a built-in — a service literally called `cpu` still resolves to
+`service:cpu`.
+
+Arguments are split like a shell would, so quotes hold a value together:
+`/service add api "java -jar api.jar"`.
+
+Thresholds are read in the unit of their chart:
 
 | Metric | Unit | Accepted | Default |
 | --- | --- | --- | --- |
 | `cpu`, `mem`, `disk` | percent | `85`, `85%` | 85, 90, 90 |
 | `diskio`, `net` | bytes/s | `100MB/s`, `512K`, `1G` | 100M/s |
 | `dns`, `ping`, `ttfb`, `request` | milliseconds | `300`, `300ms`, `1.5s` | 100, 100, 300, 800 |
+| services | percent of total CPU | `50`, `50%` | 50 |
 
 ## Reading the charts
 
@@ -145,6 +192,49 @@ network threshold would otherwise squash normal traffic into a flat line at the
 bottom of the chart; when a threshold sits above the visible range its guide line
 is simply not drawn, and by the time it matters the breach itself has raised the
 scale.
+
+## Services
+
+Nothing is charted on the services screen until you say so.
+
+```
+/discover              scan everything
+/discover postgres     scan, keeping only names or command lines matching this
+/service add nginx     chart every process whose name contains "nginx"
+/service add api "java -jar api.jar"
+/service rm nginx
+/service list
+```
+
+**How discovery decides what to offer.** "Which processes are services" is not a
+question the OS answers directly, and neither launchd nor systemd covers the
+containers and dev servers people actually watch. So the heuristic is a listening
+socket: a process that accepts connections is a service, and those are ranked
+first and marked `◆`. Everything else is ranked by CPU, because that is the other
+reason you would chart something. Ports come from the OS connection table, which
+on macOS goes through `lsof`; if that is unavailable, discovery still works and
+simply offers an unmarked list. Candidates you already chart are flagged so the
+list does not invite duplicates.
+
+**How a service is matched.** A case-insensitive substring, tested against the
+process name and — for a match containing a space or a `/` — against the full
+command line too, which is what it takes to tell two JVMs apart. Every matching
+process is summed, so a five-worker nginx is one chart.
+
+**What the number means.** The share of the whole machine's CPU capacity, on the
+same 0–100 scale as the `CPU` chart, so the two can be read against each other.
+The detail line also gives the raw figure in cores, which is what `top` would
+show you: `3 pid · 4.96 cores · 892M`.
+
+The rate comes from diffing the processes' cumulative CPU time counters between
+samples. gopsutil's own `CPUPercent` averages over each process's whole lifetime
+instead, which would draw a flat line straight through a spike. A service whose
+processes have gone away charts as a failed check rather than as 0%, so an outage
+is not indistinguishable from an idle service.
+
+Services are sampled on the system cadence (`/sysinterval`). One pass over the
+process table costs about 30ms on a machine with 600 processes, and it is skipped
+entirely when no services are configured.
 
 ## How the checks work
 
@@ -178,40 +268,76 @@ $XDG_CONFIG_HOME/status-tui/config.json   # or ~/.config/status-tui/config.json
 ```
 
 It holds the target, both intervals, the history depth, the timeouts, the
-thresholds and the list of charts `/show` has switched off.
+thresholds, the services and every chart's visibility, and it is meant to be
+edited by hand:
+
+```json
+{
+  "host": "status.azion.app",
+  "interval": "5s",
+  "sys_interval": "1s",
+  "timeouts": { "dns": "2s", "ping": "2s", "ttfb": "10s", "request": "10s" },
+  "thresholds": { "cpu": 85, "ttfb": 300, "service:nginx": 50 },
+  "service_threshold": 50,
+  "services": [
+    { "name": "nginx", "match": "nginx" },
+    { "name": "api", "match": "java -jar api.jar", "cmdline": true }
+  ],
+  "charts": {
+    "cpu": true, "mem": true, "disk": false, "diskio": true,
+    "net": true, "ping": true, "dns": true, "ttfb": true, "request": true,
+    "service:nginx": true, "service:api": false
+  }
+}
+```
+
+`charts` is written out in full on every `/save` — one explicit `true`/`false`
+per chart, including the ones left at the default — so the file doubles as the
+list of what exists and can be edited without guessing at names. A chart missing
+from the map is shown, so adding a service or upgrading to a new built-in never
+hides it.
 
 A missing file is normal. An unparsable one is reported on stderr and the
 dashboard starts on the defaults rather than refusing to run.
 
 ## Layout
 
-One row per chart, grouped under a `MACHINE` and a `NETWORK` heading. Each row is
-a fixed 30-column information block — status dot and title, the current value and
-its threshold, the window's `avg`/`max`, and the context detail — with the
-timeline chart filling every remaining column. Everything lines up in a single
-table, so you read one column of numbers and one column of shapes rather than
-hunting across tiles.
+Two screens. `MACHINE` and `NETWORK` on the main one, `SERVICES` on the second,
+switched with `Shift+Tab`. Switching is a change of view and nothing else: every
+chart keeps collecting on both screens, so nothing is lost and nothing restarts
+from blank. The top bar shows both screens with their chart counts, and an alert
+on the screen you are not looking at is reported as `(+1 unseen)`.
 
-A row is 5 lines by default. The bottom line is deliberately left blank in the
-chart column: with nine area charts touching, the screen reads as one solid
-block. The vertical rule marks where the chart begins and is drawn only beside
-the chart's own rows, which is what visually groups each chart.
+One row per chart, grouped under its section heading. Each row is a fixed
+30-column information block — status dot and title, the current value and its
+threshold, the window's `avg`/`max`, and the context detail — with the timeline
+chart filling every remaining column. Everything lines up in a single table, so
+you read one column of numbers and one column of shapes rather than hunting
+across tiles.
 
-Nine 5-line rows plus two headings, the top bar and the prompt need about 53
-terminal lines. A shorter terminal gets fewer lines per row rather than fewer
-charts — the whole point is that all of them are on screen at once — dropping the
-least useful line first:
+The information block needs 5 lines. The bottom line of a row is deliberately
+left blank in the chart column: with nine area charts touching, the screen reads
+as one solid block. The vertical rule marks where the chart begins and is drawn
+only beside the chart's own rows, which is what visually groups each chart.
+
+Rows share the available height evenly. A short terminal gives each row fewer
+lines rather than dropping a chart — the whole point is that all of them are on
+screen at once — shedding the least useful line first:
 
 | Lines per row | Information block |
 | --- | --- |
-| 5 | title · value + threshold · avg/max · detail (2 lines) |
+| 5 or more | title · value + threshold · avg/max · detail (2 lines) |
 | 4 | title · value + threshold · avg/max · detail |
 | 3 | title · value + threshold · detail |
 | 2 | title + value · detail |
 | 1 | title + value, with an inline sparkline |
 
+A row can also grow *past* the block, up to 12 lines, and the surplus goes to the
+chart: a services screen with four charts should spend a tall terminal on
+vertical resolution rather than leave a third of it blank.
+
 The minimum size depends on what is on screen, so `/show` is a real way to fit a
-short terminal rather than a dead end: nine charts need 34x15, five need 34x10.
+short terminal rather than a dead end: nine charts and two headings need 34x15.
 Below that the dashboard says so instead of quietly hiding some. The prompt stays
 pinned to the bottom.
 
@@ -226,7 +352,10 @@ window as `system/checks`.
   machine can read 0.0%. The default of 1s avoids this.
 - `DISK I/O` sums every device the OS reports, including synthetic volumes.
 - A counter that goes backwards (device removed, wraparound) is reported as a
-  zero rate rather than an enormous spike.
+  zero rate rather than an enormous spike. The same applies to a service whose
+  process set changed under the sampler.
+- Service discovery and sampling read only what the OS will tell this user about;
+  processes owned by others may report a name but no CPU or memory.
 
 ## Development
 
