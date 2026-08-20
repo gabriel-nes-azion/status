@@ -91,13 +91,59 @@ Local metrics are sampled on their own faster cadence (`/sysinterval`, default
 ## Running it
 
 ```sh
-go build -o status .
-./status
+make run          # or: go build -o status . && ./status
 ```
 
-Go 1.25+ is required (a dependency sets the floor). No arguments and no flags:
-the target, the intervals, the timeouts and the thresholds are all changed from
-inside the TUI, so you can retune while you are watching.
+Go 1.25+ is required (a dependency sets the floor).
+
+```
+usage: status [--conf <file.toml>] [--no-save]
+
+  -c, --conf <file>  read and write this configuration instead of the default
+      --no-save      do not write the configuration back on exit
+  -v, --version      print the version
+  -h, --help         print this
+```
+
+That is the whole command line: the target, the intervals, the timeouts, the
+thresholds and the services are all changed from inside the TUI, so you can
+retune while you are watching, and what you set is there next time.
+
+## Packaging a release
+
+```sh
+make dist                            # this platform
+make dist GOOS=linux GOARCH=amd64    # another one
+make dist-all                        # darwin and linux, amd64 and arm64
+```
+
+Each run writes `dist/status_<version>_<os>_<arch>.tar.gz` plus a `.sha256`
+alongside it. The tarball unpacks into its own directory holding the binary and
+this README, so it will not scatter files into whatever directory it is opened
+in.
+
+The version comes from `git describe --tags --always --dirty`, so a tagged commit
+yields the tag and anything else the short hash with `-dirty` when the tree has
+uncommitted changes. It is compiled in, and the binary reports it:
+
+```sh
+$ ./status --version
+status v1.2.0
+```
+
+Release binaries are built with `-trimpath -ldflags "-s -w"`, which keeps local
+filesystem paths out of the artifact and drops the symbol and DWARF tables —
+about a third of the size, 7.9M down to 3.0M compressed. Cross-compiled builds
+have cgo disabled, since there is no cross toolchain; the only behavioural
+consequence is that the DNS check's fallback to the platform resolver is Go's own
+resolver on those binaries.
+
+Override `VERSION` to name an artifact yourself, which is what a CI tag build
+wants:
+
+```sh
+make dist-all VERSION=v1.2.0
+```
 
 ## Commands
 
@@ -261,44 +307,113 @@ body. An HTTP status of 400 or above counts as a failed check.
 
 ## Configuration file
 
-Read at startup and written by `/save`:
+TOML, read at startup and written back on exit:
 
 ```
-$XDG_CONFIG_HOME/status-tui/config.json   # or ~/.config/status-tui/config.json
+$XDG_CONFIG_HOME/status-tui/config.toml   # or ~/.config/status-tui/config.toml
 ```
 
-It holds the target, both intervals, the history depth, the timeouts, the
-thresholds, the services and every chart's visibility, and it is meant to be
-edited by hand:
+Whatever you set in the TUI — the target, the intervals, the timeouts, the
+thresholds, the services, which charts are shown — is there the next time you
+start. `/save` writes it immediately if you want to be sure; otherwise quitting
+does it.
 
-```json
-{
-  "host": "status.azion.app",
-  "interval": "5s",
-  "sys_interval": "1s",
-  "timeouts": { "dns": "2s", "ping": "2s", "ttfb": "10s", "request": "10s" },
-  "thresholds": { "cpu": 85, "ttfb": 300, "service:nginx": 50 },
-  "service_threshold": 50,
-  "services": [
-    { "name": "nginx", "match": "nginx" },
-    { "name": "api", "match": "java -jar api.jar", "cmdline": true }
-  ],
-  "charts": {
-    "cpu": true, "mem": true, "disk": false, "diskio": true,
-    "net": true, "ping": true, "dns": true, "ttfb": true, "request": true,
-    "service:nginx": true, "service:api": false
-  }
-}
+Nothing is written when nothing changed, so a file you maintain by hand keeps its
+formatting and its timestamp across runs that only looked at it. A first run does
+leave a file, even an unchanged one, so there is something to edit.
+
+### Using a specific file
+
+```sh
+status --conf ./prod.toml      # read this file, and write it back on exit
+status --conf ./prod.toml --no-save
 ```
 
-`charts` is written out in full on every `/save` — one explicit `true`/`false`
-per chart, including the ones left at the default — so the file doubles as the
-list of what exists and can be edited without guessing at names. A chart missing
-from the map is shown, so adding a service or upgrading to a new built-in never
-hides it.
+A `--conf` path is taken literally: it is read and written, and the default
+location is not consulted. That is how you keep one setup per environment — a
+`prod.toml` watching a production endpoint with its own thresholds, a
+`local.toml` watching a dev server. A file that does not exist yet is created on
+exit, so `--conf ./new.toml` is also how you start one.
 
-A missing file is normal. An unparsable one is reported on stderr and the
-dashboard starts on the defaults rather than refusing to run.
+`--no-save` runs without writing anything back, for when you want to poke at
+thresholds without committing to them.
+
+### The format
+
+Every field is optional. What the file omits keeps its default, so a three-line
+file is a valid file:
+
+```toml
+[target]
+url = "https://status.azion.app/health"
+ping_mode = "auto"       # icmp, tcp or auto
+insecure_tls = false
+
+[sampling]
+checks = "5s"            # network check interval
+system = "1s"            # local metric interval
+history = 600            # samples kept per chart
+
+[sources]
+mount = "/"              # filesystem for the disk usage chart
+interface = ""           # network interface, empty for all
+
+[timeouts]
+dns = "2s"
+ping = "2s"
+ttfb = "10s"
+request = "10s"
+
+# cpu/mem/disk are percent, diskio/net are bytes per second,
+# dns/ping/ttfb/request are milliseconds, services are percent of total CPU.
+[thresholds]
+cpu = 85.0
+ttfb = 300.0
+"service:nginx" = 25.0
+service_default = 50.0   # given to a newly added service
+
+[charts]
+cpu = true
+disk = false
+"service:nginx" = true
+
+[[services]]
+name = "nginx"
+match = "nginx"          # case-insensitive substring of the process name
+
+[[services]]
+name = "api"
+match = "java -jar api.jar"
+cmdline = true           # also match against the full command line
+```
+
+`[charts]` is written out in full on every save — one explicit `true`/`false` per
+chart, including the ones left at the default — so the file doubles as the list of
+what exists and can be edited without guessing at names. A chart missing from the
+map is shown, so adding a service or upgrading to a new built-in never arrives
+hidden.
+
+The file is written with the comments above included, because nothing in
+`diskio = 104857600` tells you the unit and a file meant to be opened in an
+editor should say.
+
+### When it goes wrong
+
+A missing file is normal: the defaults are used and the file is created on exit.
+
+A file that does not parse is reported on stderr and the dashboard starts on the
+defaults rather than refusing to open — a stray bracket should not cost you the
+tool. That run will not overwrite the file, so you can go and fix it. If you do
+change something and it gets written, the unreadable original is copied to
+`config.toml.bak` first and the path is printed.
+
+Saves go through a temporary file in the same directory and are renamed over the
+target, so an interrupted save cannot leave a half-written config where a good one
+used to be.
+
+A `config.json` from an earlier version is imported once, on the first run that
+finds no `config.toml` next to it. The JSON file is left alone rather than
+deleted, and the import is announced on stderr.
 
 ## Layout
 
@@ -360,10 +475,10 @@ window as `system/checks`.
 ## Development
 
 ```sh
-go test ./...          # unit tests, plus one that hits the real network
-go test -race ./...
-go test -short ./...   # skips the network-dependent test
-go vet ./...
+make test              # unit tests, plus a few that hit the real network
+make race
+make lint              # go vet plus a gofmt check
+go test -short ./...   # skips the network- and process-dependent tests
 ```
 
 `TestDumpView*` in `internal/ui` print rendered frames at various terminal sizes,

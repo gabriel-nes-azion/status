@@ -1,11 +1,12 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestSnapshotIsIndependent(t *testing.T) {
@@ -73,7 +74,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	c := Default()
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c.Update(func(s *Settings) {
 		s.Host = "example.com"
 		s.Path = "/health"
@@ -97,11 +101,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if want := filepath.Join(dir, "status-tui", "config.json"); path != want {
+	if want := filepath.Join(dir, "status-tui", "config.toml"); path != want {
 		t.Errorf("saved to %s, want %s", path, want)
 	}
 
-	loaded, err := Load()
+	loaded, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -158,7 +162,10 @@ func TestSaveWritesEveryChartExplicitly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	c := Default()
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c.Update(func(s *Settings) {
 		s.AddService(Service{Name: "nginx", Match: "nginx"})
 		s.Shown[MetricChart(Disk)] = false
@@ -167,18 +174,10 @@ func TestSaveWritesEveryChartExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var file struct {
-		Charts   map[string]bool `json:"charts"`
-		Services []struct {
-			Name string `json:"name"`
-		} `json:"services"`
-	}
-	if err := json.Unmarshal(raw, &file); err != nil {
-		t.Fatalf("saved file is not valid json: %v", err)
+
+	var file tomlFile
+	if _, err := toml.DecodeFile(path, &file); err != nil {
+		t.Fatalf("saved file is not valid TOML: %v", err)
 	}
 	if len(file.Charts) != len(Order)+1 {
 		t.Errorf("charts has %d entries, want %d (every built-in plus the service)",
@@ -297,7 +296,7 @@ func TestSnapshotShownIsIndependent(t *testing.T) {
 
 func TestLoadMissingFileUsesDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	c, err := Load()
+	c, err := Load("")
 	if err != nil {
 		t.Fatalf("a missing config file must not be an error: %v", err)
 	}
@@ -312,10 +311,10 @@ func TestLoadBrokenFileStillYieldsDefaults(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "status-tui"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "status-tui", "config.json"), []byte("{nope"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "status-tui", "config.toml"), []byte("[target\nnope"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	c, err := Load()
+	c, err := Load("")
 	if err == nil {
 		t.Error("a corrupt file should be reported")
 	}
@@ -333,6 +332,36 @@ func TestEveryMetricHasATitle(t *testing.T) {
 	for _, m := range Probes {
 		if _, ok := DefaultSettings().Timeouts[m]; !ok {
 			t.Errorf("probe %s has no default timeout", m)
+		}
+	}
+}
+
+func TestParseTarget(t *testing.T) {
+	cases := []struct {
+		in                 string
+		scheme, host, path string
+	}{
+		{"status.azion.app", "https", "status.azion.app", "/"},
+		{"status.azion.app/health", "https", "status.azion.app", "/health"},
+		{"https://status.azion.app/", "https", "status.azion.app", "/"},
+		{"http://localhost:8080", "http", "localhost:8080", "/"},
+		{"https://example.com/a?b=c", "https", "example.com", "/a?b=c"},
+		{"  example.com  ", "https", "example.com", "/"},
+	}
+	for _, c := range cases {
+		got, err := ParseTarget(c.in)
+		if err != nil {
+			t.Errorf("ParseTarget(%q) failed: %v", c.in, err)
+			continue
+		}
+		if got.Scheme != c.scheme || got.Host != c.host || got.Path != c.path {
+			t.Errorf("ParseTarget(%q) = %+v, want %s/%s/%s", c.in, got, c.scheme, c.host, c.path)
+		}
+	}
+
+	for _, bad := range []string{"", "   ", "ftp://example.com", "http://"} {
+		if got, err := ParseTarget(bad); err == nil {
+			t.Errorf("ParseTarget(%q) should have failed, got %+v", bad, got)
 		}
 	}
 }

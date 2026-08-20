@@ -4,11 +4,15 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// AppName is the program name, used in the usage text and the config path.
+const AppName = "status"
 
 // Metric identifies one of the built-in charts. These identifiers are also the
 // names accepted by /threshold and /timeout, so they double as user-facing
@@ -147,6 +151,45 @@ type Service struct {
 	Name    string
 	Match   string
 	Cmdline bool
+}
+
+// Target is a normalised check destination.
+type Target struct {
+	Scheme string
+	Host   string
+	Path   string
+}
+
+// ParseTarget accepts a bare hostname, a host:port pair or a full URL and
+// normalises it into scheme/host/path. It lives here rather than with the probes
+// because it is how both the /host command and the config file read a target.
+func ParseTarget(input string) (Target, error) {
+	in := strings.TrimSpace(input)
+	if in == "" {
+		return Target{}, fmt.Errorf("empty host")
+	}
+	if !strings.Contains(in, "://") {
+		// Bare host, optionally with a path: "example.com/health".
+		in = "https://" + in
+	}
+	u, err := url.Parse(in)
+	if err != nil {
+		return Target{}, fmt.Errorf("invalid host: %w", err)
+	}
+	if u.Hostname() == "" {
+		return Target{}, fmt.Errorf("invalid host: no hostname in %q", input)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return Target{}, fmt.Errorf("unsupported scheme %q (use http or https)", u.Scheme)
+	}
+	path := u.Path
+	if path == "" {
+		path = "/"
+	}
+	if u.RawQuery != "" {
+		path += "?" + u.RawQuery
+	}
+	return Target{Scheme: u.Scheme, Host: u.Host, Path: path}, nil
 }
 
 // PingMode selects the transport used by the latency probe.
@@ -435,10 +478,28 @@ func NormaliseServiceName(s string) string {
 type Config struct {
 	mu sync.RWMutex
 	s  Settings
+
+	// path is the file this configuration is read from and written to.
+	path string
+	// baseline is the state as loaded, so an exit save can tell whether anything
+	// actually changed.
+	baseline Settings
+	// exists records whether the file was there, so a first run still leaves one.
+	exists bool
+	// migratedFrom is the legacy file settings were picked up from, if any.
+	migratedFrom string
+	// salvage marks a file that failed to parse, so the next save copies it aside
+	// instead of replacing it outright.
+	salvage bool
+	// savedBackup is where that copy went.
+	savedBackup string
 }
 
-// Default returns a Config holding the built-in defaults.
-func Default() *Config { return &Config{s: DefaultSettings()} }
+// Default returns a Config holding the built-in defaults, not backed by a file.
+func Default() *Config {
+	s := DefaultSettings()
+	return &Config{s: s, baseline: s}
+}
 
 // Snapshot returns an independent copy for a reader to use without locking.
 func (c *Config) Snapshot() Settings {

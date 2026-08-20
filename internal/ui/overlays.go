@@ -63,6 +63,10 @@ func helpOverlay() []string {
 
 	return append(lines,
 		"",
+		section("configuration"),
+		"  "+styDim.Render("everything set here is written on exit and read back next time."),
+		"  "+styDim.Render("/config shows the file in use; run with --conf <file> to pick another."),
+		"",
 		section("reading it"),
 		"  "+styDim.Render("two screens: MACHINE and NETWORK on the main one, SERVICES on the second."),
 		"  "+styDim.Render("every chart keeps collecting on both, so switching never loses history."),
@@ -75,7 +79,7 @@ func helpOverlay() []string {
 	)
 }
 
-func configOverlay(cfg config.Settings, paused bool) []string {
+func configOverlay(cfg config.Settings, paused bool, path string) []string {
 	state := styOK.Render("running")
 	if paused {
 		state = styPaused.Render("paused")
@@ -110,7 +114,11 @@ func configOverlay(cfg config.Settings, paused bool) []string {
 	lines = append(lines, timeoutLines(cfg)...)
 	lines = append(lines, "", section("thresholds"))
 	lines = append(lines, thresholdLines(cfg)...)
-	lines = append(lines, "", styFaint.Render("  config file: "+config.FilePath()+"  (/save to write)"))
+	if path == "" {
+		path = "(nowhere — no writable config directory)"
+	}
+	lines = append(lines, "", styFaint.Render("  config file: "+path),
+		styFaint.Render("  written on exit and by /save"))
 	return lines
 }
 

@@ -3,9 +3,7 @@
 package probe
 
 import (
-	"fmt"
 	"net"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -74,44 +72,6 @@ func shortErr(err error) string {
 		msg = msg[:57] + "..."
 	}
 	return msg
-}
-
-// Target is a normalised check destination.
-type Target struct {
-	Scheme string
-	Host   string
-	Path   string
-}
-
-// ParseTarget accepts a bare hostname, a host:port pair or a full URL and
-// normalises it into scheme/host/path.
-func ParseTarget(input string) (Target, error) {
-	in := strings.TrimSpace(input)
-	if in == "" {
-		return Target{}, fmt.Errorf("empty host")
-	}
-	if !strings.Contains(in, "://") {
-		// Bare host, optionally with a path: "example.com/health".
-		in = "https://" + in
-	}
-	u, err := url.Parse(in)
-	if err != nil {
-		return Target{}, fmt.Errorf("invalid host: %w", err)
-	}
-	if u.Hostname() == "" {
-		return Target{}, fmt.Errorf("invalid host: no hostname in %q", input)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return Target{}, fmt.Errorf("unsupported scheme %q (use http or https)", u.Scheme)
-	}
-	path := u.Path
-	if path == "" {
-		path = "/"
-	}
-	if u.RawQuery != "" {
-		path += "?" + u.RawQuery
-	}
-	return Target{Scheme: u.Scheme, Host: u.Host, Path: path}, nil
 }
 
 // hostname strips any port from cfg.Host, for DNS and ICMP which are

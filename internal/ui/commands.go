@@ -9,7 +9,6 @@ import (
 
 	"status/internal/config"
 	"status/internal/metrics"
-	"status/internal/probe"
 )
 
 // command is one slash command. run returns the feedback line shown under the
@@ -98,7 +97,7 @@ func init() {
 				if len(args) == 0 {
 					return "", nil, fmt.Errorf("usage: /host <domain|url>")
 				}
-				t, err := probe.ParseTarget(args[0])
+				t, err := config.ParseTarget(args[0])
 				if err != nil {
 					return "", nil, err
 				}
@@ -519,13 +518,13 @@ func init() {
 		{
 			name: "/config", desc: "show the full current configuration",
 			run: func(m *Model, _ []string) (string, tea.Cmd, error) {
-				m.overlay = configOverlay(m.cfg.Snapshot(), m.paused)
+				m.overlay = configOverlay(m.cfg.Snapshot(), m.paused, m.cfg.Path())
 				m.overlayTitle = "CONFIG"
 				return "", nil, nil
 			},
 		},
 		{
-			name: "/save", desc: "persist the current configuration to disk",
+			name: "/save", desc: "write the configuration now (it is also written on exit)",
 			run: func(m *Model, _ []string) (string, tea.Cmd, error) {
 				path, err := m.cfg.Save()
 				if err != nil {

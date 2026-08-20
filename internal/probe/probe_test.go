@@ -6,36 +6,6 @@ import (
 	"status/internal/config"
 )
 
-func TestParseTarget(t *testing.T) {
-	cases := []struct {
-		in                 string
-		scheme, host, path string
-	}{
-		{"status.azion.app", "https", "status.azion.app", "/"},
-		{"status.azion.app/health", "https", "status.azion.app", "/health"},
-		{"https://status.azion.app/", "https", "status.azion.app", "/"},
-		{"http://localhost:8080", "http", "localhost:8080", "/"},
-		{"https://example.com/a?b=c", "https", "example.com", "/a?b=c"},
-		{"  example.com  ", "https", "example.com", "/"},
-	}
-	for _, c := range cases {
-		got, err := ParseTarget(c.in)
-		if err != nil {
-			t.Errorf("ParseTarget(%q) failed: %v", c.in, err)
-			continue
-		}
-		if got.Scheme != c.scheme || got.Host != c.host || got.Path != c.path {
-			t.Errorf("ParseTarget(%q) = %+v, want %s/%s/%s", c.in, got, c.scheme, c.host, c.path)
-		}
-	}
-
-	for _, bad := range []string{"", "   ", "ftp://example.com", "http://"} {
-		if got, err := ParseTarget(bad); err == nil {
-			t.Errorf("ParseTarget(%q) should have failed, got %+v", bad, got)
-		}
-	}
-}
-
 func TestHostnameStripsPort(t *testing.T) {
 	if got := hostname("example.com:8443"); got != "example.com" {
 		t.Errorf("hostname = %q", got)

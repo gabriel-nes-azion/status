@@ -510,7 +510,7 @@ func TestOverlayColumnsNeverCollide(t *testing.T) {
 
 	for _, lines := range [][]string{
 		thresholdsOverlay(snap),
-		configOverlay(snap, false),
+		configOverlay(snap, false, "/tmp/status.toml"),
 		servicesOverlay(snap),
 	} {
 		for _, l := range lines {
