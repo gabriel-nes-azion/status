@@ -82,14 +82,18 @@ type Model struct {
 	picker    bool
 	pickerIdx int
 
-	// discovery is the /discover result list, with the candidates the user has
-	// ticked so far. Kept separate from the picker: one edits configuration that
-	// already exists, the other proposes configuration that does not.
+	// discovering is the /discover result list: processes proposed for charting,
+	// ticked and then confirmed.
 	discovering bool
-	discoverIdx int
 	scanning    bool
 	candidates  []metrics.Candidate
-	chosen      map[string]bool
+	discoverSel selection
+
+	// managing is the /service list: the services already charted, where ticking
+	// a row marks it to stop being charted. Kept separate from the picker, which
+	// edits visibility rather than configuration.
+	managing  bool
+	manageSel selection
 
 	paused bool
 
@@ -126,10 +130,11 @@ func New(cfg *config.Config) *Model {
 		detail:   make(map[config.ChartID]string, len(config.Order)),
 		errmsg:   make(map[config.ChartID]string, len(config.Order)),
 		inflight: make(map[config.Metric]bool, len(config.Probes)),
-		chosen:   map[string]bool{},
 		input:    ti,
 		chartW:   60,
 	}
+	m.discoverSel = newSelection()
+	m.manageSel = newSelection()
 	m.syncSeries(snap)
 	m.histIdx = 0
 	return m
@@ -421,8 +426,7 @@ func (m *Model) applyDiscovery(msg discoverMsg) tea.Cmd {
 		return nil
 	}
 	m.candidates = msg.candidates
-	m.chosen = map[string]bool{}
-	m.discoverIdx = 0
+	m.discoverSel.reset()
 	m.discovering = true
 	m.overlay = nil
 	return nil
@@ -430,9 +434,9 @@ func (m *Model) applyDiscovery(msg discoverMsg) tea.Cmd {
 
 // addChosenServices registers everything ticked in the discovery list.
 func (m *Model) addChosenServices() string {
-	names := make([]string, 0, len(m.chosen))
+	names := make([]string, 0, m.discoverSel.count())
 	for _, c := range m.candidates {
-		if !m.chosen[c.Name] {
+		if !m.discoverSel.isMarked(c.Name) {
 			continue
 		}
 		name := config.NormaliseServiceName(c.Name)
@@ -469,6 +473,9 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// the prompt behind it.
 	if m.discovering {
 		return m.handleDiscoverKey(k)
+	}
+	if m.managing {
+		return m.handleManageKey(k)
 	}
 	if m.picker {
 		return m.handlePickerKey(k)
@@ -597,72 +604,121 @@ func (m *Model) handlePickerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleDiscoverKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	n := len(m.candidates)
 	if n == 0 {
-		m.discovering = false
+		m.closeDiscovery()
 		return m, nil
 	}
-	if m.discoverIdx >= n {
-		m.discoverIdx = n - 1
-	}
+	m.discoverSel.clamp(n)
 
-	switch k.Type {
-	case tea.KeyCtrlC, tea.KeyCtrlD:
+	if d := cursorDelta(k); d != 0 {
+		m.discoverSel.move(d, n)
+		return m, nil
+	}
+	switch classify(k) {
+	case listQuit:
 		return m, tea.Quit
-	case tea.KeyEsc:
+	case listCancel:
 		m.closeDiscovery()
 		m.setStatus("discovery cancelled", false)
 		return m, nil
-	case tea.KeyEnter:
+	case listConfirm:
 		msg := m.addChosenServices()
 		m.closeDiscovery()
 		m.setStatus(msg, false)
 		// Sample immediately so the new charts are not blank until the next tick.
 		return m, m.collectServices()
-	case tea.KeyUp:
-		m.discoverIdx = (m.discoverIdx - 1 + n) % n
-		return m, nil
-	case tea.KeyDown:
-		m.discoverIdx = (m.discoverIdx + 1) % n
-		return m, nil
-	case tea.KeySpace:
-		m.toggleCandidate()
+	case listToggle:
+		m.discoverSel.toggle(m.candidates[m.discoverSel.idx].Name)
 		return m, nil
 	}
 
-	switch strings.ToLower(k.String()) {
-	case "k":
-		m.discoverIdx = (m.discoverIdx - 1 + n) % n
-	case "j":
-		m.discoverIdx = (m.discoverIdx + 1) % n
-	case "x":
-		m.toggleCandidate()
-	case "l":
+	if strings.EqualFold(k.String(), "l") {
 		// Tick everything holding a listening socket: the common case is "chart
 		// the servers on this box".
 		for _, c := range m.candidates {
 			if c.Listening {
-				m.chosen[c.Name] = true
+				m.discoverSel.mark(c.Name)
 			}
 		}
-	case "q":
-		m.closeDiscovery()
 	}
 	return m, nil
-}
-
-func (m *Model) toggleCandidate() {
-	name := m.candidates[m.discoverIdx].Name
-	if m.chosen[name] {
-		delete(m.chosen, name)
-		return
-	}
-	m.chosen[name] = true
 }
 
 func (m *Model) closeDiscovery() {
 	m.discovering = false
 	m.candidates = nil
-	m.chosen = map[string]bool{}
-	m.discoverIdx = 0
+	m.discoverSel.reset()
+}
+
+// handleManageKey drives the /service list, where a ticked row is one to stop
+// charting. Removal only happens on Enter, so a mis-hit space is harmless.
+func (m *Model) handleManageKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	svcs := m.cfg.Snapshot().Services
+	n := len(svcs)
+	m.manageSel.clamp(n)
+
+	if d := cursorDelta(k); d != 0 {
+		m.manageSel.move(d, n)
+		return m, nil
+	}
+	switch classify(k) {
+	case listQuit:
+		return m, tea.Quit
+	case listCancel:
+		m.closeManage()
+		return m, nil
+	case listConfirm:
+		msg := m.removeMarkedServices()
+		m.closeManage()
+		if msg != "" {
+			m.setStatus(msg, false)
+		}
+		return m, nil
+	case listToggle:
+		if n > 0 {
+			m.manageSel.toggle(svcs[m.manageSel.idx].Name)
+		}
+		return m, nil
+	}
+
+	if strings.EqualFold(k.String(), "a") && n > 0 {
+		// Tick everything, for tearing down a whole set at once.
+		for _, svc := range svcs {
+			m.manageSel.mark(svc.Name)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) closeManage() {
+	m.managing = false
+	m.manageSel.reset()
+}
+
+// removeMarkedServices stops charting everything ticked in the /service list,
+// dropping its series, its threshold and its visibility entry with it.
+func (m *Model) removeMarkedServices() string {
+	if m.manageSel.count() == 0 {
+		return ""
+	}
+	var removed []string
+	for _, svc := range m.cfg.Snapshot().Services {
+		if !m.manageSel.isMarked(svc.Name) {
+			continue
+		}
+		name := svc.Name
+		ok := false
+		m.cfg.Update(func(s *config.Settings) { ok = s.RemoveService(name) })
+		if !ok {
+			continue
+		}
+		m.svcColl.Forget(name)
+		removed = append(removed, name)
+	}
+	if len(removed) == 0 {
+		return ""
+	}
+	m.syncSeries(m.cfg.Snapshot())
+	return "stopped monitoring " + strings.Join(removed, ", ")
 }
 
 // toggleShown flips one chart's visibility.

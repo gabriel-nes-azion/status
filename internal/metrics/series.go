@@ -33,7 +33,17 @@ func (s *Series) Append(sm Sample) {
 	}
 }
 
-func (s *Series) Len() int { return s.n }
+// The read methods tolerate a nil receiver, so a chart whose series has not been
+// created yet renders as "no data" instead of taking the whole dashboard down
+// with it. Writing to a nil series still panics: that is a real bug, and it
+// should be loud.
+
+func (s *Series) Len() int {
+	if s == nil {
+		return 0
+	}
+	return s.n
+}
 
 // Reset drops all samples but keeps the capacity.
 func (s *Series) Reset() {
@@ -60,6 +70,9 @@ func (s *Series) Resize(capacity int) {
 
 // Tail returns up to n most recent samples, oldest first.
 func (s *Series) Tail(n int) []Sample {
+	if s == nil {
+		return nil
+	}
 	if n > s.n {
 		n = s.n
 	}
@@ -76,7 +89,7 @@ func (s *Series) Tail(n int) []Sample {
 
 // Last returns the newest sample.
 func (s *Series) Last() (Sample, bool) {
-	if s.n == 0 {
+	if s == nil || s.n == 0 {
 		return Sample{}, false
 	}
 	idx := (s.next - 1 + len(s.buf)) % len(s.buf)
@@ -91,6 +104,9 @@ type Stats struct {
 }
 
 func (s *Series) Stats(n int) Stats {
+	if s == nil {
+		return Stats{}
+	}
 	tail := s.Tail(n)
 	st := Stats{}
 	var sum float64

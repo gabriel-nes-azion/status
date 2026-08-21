@@ -329,26 +329,26 @@ func init() {
 			},
 		},
 		{
-			name: "/service", args: "<add|rm|list> [name] [match]", desc: "manage the charted services by hand",
+			name: "/service", args: "[add|rm] [name] [match]", desc: "list the charted services, and pick any to stop charting",
 			suggest: func(m *Model, i int, p string) []string {
 				switch i {
 				case 0:
-					return filterPrefix([]string{"add", "rm", "list"}, p)
+					return filterPrefix([]string{"add", "rm"}, p)
 				case 1:
 					return filterPrefix(serviceNames(m), p)
 				}
 				return nil
 			},
 			run: func(m *Model, args []string) (string, tea.Cmd, error) {
-				if len(args) == 0 {
-					return "", nil, fmt.Errorf("usage: /service <add|rm|list> [name] [match]")
+				// No argument lists what is charted, and that list is where you
+				// take something off it: the common case is looking, and the
+				// second most common is removing what you just looked at.
+				if len(args) == 0 || strings.EqualFold(args[0], "list") {
+					m.managing = true
+					m.manageSel.reset()
+					return "", nil, nil
 				}
 				switch strings.ToLower(args[0]) {
-				case "list":
-					m.overlay = servicesOverlay(m.cfg.Snapshot())
-					m.overlayTitle = "SERVICES"
-					return "", nil, nil
-
 				case "add":
 					if len(args) < 2 {
 						return "", nil, fmt.Errorf("usage: /service add <name> [match]")
@@ -386,7 +386,7 @@ func init() {
 					m.syncSeries(m.cfg.Snapshot())
 					return "stopped monitoring " + name, nil, nil
 				}
-				return "", nil, fmt.Errorf("unknown subcommand %q (add, rm or list)", args[0])
+				return "", nil, fmt.Errorf("unknown subcommand %q (add or rm; /service alone lists them)", args[0])
 			},
 		},
 		{

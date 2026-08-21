@@ -77,7 +77,8 @@ Nine charts, all visible at once, all plotted as timelines, in two sections.
 | one per service | CPU share of every matching process | detail line shows pid count, cores and RSS |
 
 Nothing is charted there until you add something. `/discover` scans the machine
-and lets you pick from a ranked list; `/service add` does it by hand.
+and lets you pick from a ranked list; `/service add` does it by hand; `/service`
+lists what is charted and lets you take things off the list.
 
 Use `/show` to hide the charts you are not watching; hidden charts keep
 collecting, so unhiding one restores its history instead of starting blank, and
@@ -163,7 +164,7 @@ Type `/` to open the completion popup. `Tab` accepts the highlighted entry;
 | `/show [chart\|section\|all\|none]` | pick which charts are displayed; no argument opens the picker |
 | `/screen [main\|services]` | switch screens; no argument cycles, as `Shift+Tab` does |
 | `/discover [filter]` | scan the machine for services and pick which to chart |
-| `/service <add\|rm\|list> [name] [match]` | manage the charted services by hand |
+| `/service [add\|rm] [name] [match]` | list the charted services, and pick any to stop charting |
 | `/disk <mountpoint>` | which filesystem the disk usage panel reports |
 | `/net <interface\|all>` | which interface the network panel sums |
 | `/pingmode <auto\|icmp\|tcp>` | latency transport |
@@ -180,11 +181,18 @@ Keys: `Shift+Tab` switch screens · `Tab` complete · `↑`/`↓` completions, o
 command history when the popup is closed · `Esc` dismiss a panel or clear the
 prompt · `Ctrl+R` sample everything now · `Ctrl+L` clear history · `Ctrl+C` quit.
 
-In the `/show` picker: `↑`/`↓` move · `Space` toggle · `a` show all · `n` hide
-all · `Esc` close. In the `/discover` list: `↑`/`↓` move · `Space` select · `l`
-select everything with a listening socket · `Enter` chart the selection · `Esc`
-cancel. Both lists own the keyboard while open, so nothing leaks into the prompt
-behind them, and the prompt greys out to say so.
+The modal lists share their keys: `↑`/`↓` (or `j`/`k`) move, `Space` (or `x`)
+ticks the row under the cursor, `Esc` (or `q`) closes.
+
+| List | Tick means | `Enter` | Extra |
+| --- | --- | --- | --- |
+| `/show` | shown | close | `a` show all, `n` hide all — toggles apply at once |
+| `/discover` | chart this | chart the ticked | `l` tick everything listening |
+| `/service` | stop charting this | remove the ticked | `a` tick everything |
+
+`/show` applies each toggle immediately; the other two do nothing until `Enter`,
+so a mis-hit is harmless. All three own the keyboard while open, so nothing leaks
+into the prompt behind them, and the prompt greys out to say so.
 
 A panel taller than the terminal (`/help`, `/config`) scrolls with `↑`/`↓` and
 `PgUp`/`PgDn`. Any other key closes it, and that key is swallowed rather than
@@ -246,11 +254,20 @@ Nothing is charted on the services screen until you say so.
 ```
 /discover              scan everything
 /discover postgres     scan, keeping only names or command lines matching this
+/service               list what is charted, and pick any to stop charting
 /service add nginx     chart every process whose name contains "nginx"
 /service add api "java -jar api.jar"
-/service rm nginx
-/service list
+/service rm nginx      remove one by name, without the list
 ```
+
+`/service` on its own is the way in: it lists what is charted with each one's
+match, threshold and current value, and ticking a row marks it to stop being
+charted. Nothing happens until `Enter` confirms, so a mis-hit `Space` costs
+nothing, and `Esc` discards the marks. `a` marks everything, for tearing down a
+whole set.
+
+The tick means *remove* here, the opposite of the `/show` picker where it means
+*shown*, so it is drawn as a red `✗` and the heading says which one you are in.
 
 **How discovery decides what to offer.** "Which processes are services" is not a
 question the OS answers directly, and neither launchd nor systemd covers the

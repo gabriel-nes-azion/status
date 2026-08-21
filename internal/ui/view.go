@@ -34,6 +34,7 @@ const (
 	// more room.
 	pickerRowWidth   = 46
 	discoverRowWidth = 66
+	serviceRowWidth  = 72
 	// Below this width the dashboard cannot show a usable chart at all.
 	minTermW = 34
 	// chrome is the number of lines the top bar and the prompt always take, and
@@ -114,6 +115,8 @@ func (m *Model) View() string {
 	switch {
 	case m.discovering:
 		body = m.renderDiscovery(innerW, gridH)
+	case m.managing:
+		body = m.renderServiceList(innerW, gridH)
 	case m.picker:
 		body = m.renderPicker(innerW, gridH)
 	case m.overlay != nil:
@@ -388,6 +391,8 @@ func (m *Model) modalHint() string {
 	switch {
 	case m.discovering:
 		return "picking services — enter to chart them, esc to cancel"
+	case m.managing:
+		return "managing services — enter to apply, esc to cancel"
 	case m.picker:
 		return "selecting charts — esc to return to the prompt"
 	}
@@ -582,7 +587,7 @@ func (m *Model) renderDiscovery(w, h int) string {
 	snap := m.cfg.Snapshot()
 	avail := h - 2
 
-	header := fmt.Sprintf("%d candidates · %d selected", len(m.candidates), len(m.chosen))
+	header := fmt.Sprintf("%d candidates · %d selected", len(m.candidates), m.discoverSel.count())
 	lines := []string{
 		section("discovered"),
 		styFaint.Render("  " + header),
@@ -599,8 +604,8 @@ func (m *Model) renderDiscovery(w, h int) string {
 
 	// Keep the cursor on screen when the list is longer than the box.
 	from := 0
-	if m.discoverIdx >= body {
-		from = m.discoverIdx - body + 1
+	if m.discoverSel.idx >= body {
+		from = m.discoverSel.idx - body + 1
 	}
 	to := from + body
 	if to > len(m.candidates) {
@@ -624,12 +629,12 @@ func (m *Model) candidateRow(i int, snap config.Settings, w int) string {
 
 	cursor := "  "
 	nameSty := styText
-	if i == m.discoverIdx {
+	if i == m.discoverSel.idx {
 		cursor = styAccent.Render("❯ ")
 		nameSty = styAccentB
 	}
 	box := styFaint.Render("[ ]")
-	if m.chosen[c.Name] {
+	if m.discoverSel.isMarked(c.Name) {
 		box = styOK.Render("[✓]")
 	}
 
@@ -638,7 +643,7 @@ func (m *Model) candidateRow(i int, snap config.Settings, w int) string {
 	if _, exists := snap.Service(config.NormaliseServiceName(c.Name)); exists {
 		name += " ✓"
 		nameSty = styDim
-		if i == m.discoverIdx {
+		if i == m.discoverSel.idx {
 			nameSty = styAccent
 		}
 	}
@@ -685,4 +690,173 @@ func clampRowWidth(w, max int) int {
 		rowW = 12
 	}
 	return rowW
+}
+
+// renderServiceList draws the /service list: what is being charted, and which
+// rows are ticked to stop being charted.
+//
+// The tick means "remove" here and "keep" in the /show picker, so it is drawn as
+// a red ✗ rather than a check, and the heading says so. Two similar-looking lists
+// with inverted checkboxes would be a trap.
+func (m *Model) renderServiceList(w, h int) string {
+	snap := m.cfg.Snapshot()
+	svcs := snap.Services
+	avail := h - 2 // the box border
+
+	if len(svcs) == 0 {
+		return m.modalBox([]string{
+			section("services"),
+			"",
+			"  " + styDim.Render("nothing charted yet."),
+			"",
+			"  " + styAccent.Render(pad("/discover", 22)) + styDim.Render("scan this machine and pick from the list"),
+			"  " + styAccent.Render(pad("/service add <name>", 22)) + styDim.Render("chart a process group by hand"),
+			"",
+			styFaint.Render("  esc closes"),
+		}, w, h, colAccent)
+	}
+
+	marked := m.manageSel.count()
+	head := fmt.Sprintf("%d charted", len(svcs))
+	if marked > 0 {
+		head += fmt.Sprintf(" · %d to remove", marked)
+	}
+	lines := []string{section("services"), styFaint.Render("  " + head), ""}
+
+	hint := []string{"", styFaint.Render(
+		"  space mark · a mark all · enter stop monitoring the marked · esc cancel")}
+
+	rowW := clampRowWidth(w, serviceRowWidth)
+	cols := serviceColumns(m, svcs, snap, rowW)
+	body := avail - len(lines) - len(hint)
+	if body < 1 {
+		body = 1
+	}
+
+	// Keep the cursor on screen when the list is longer than the box.
+	from := 0
+	if m.manageSel.idx >= body {
+		from = m.manageSel.idx - body + 1
+	}
+	to := from + body
+	if to > len(svcs) {
+		to = len(svcs)
+	}
+	for i := from; i < to; i++ {
+		lines = append(lines, m.serviceRow(svcs[i], snap, i == m.manageSel.idx, rowW, cols))
+	}
+	if to < len(svcs) {
+		lines[len(lines)-1] = styFaint.Render(fmt.Sprintf("  … %d more below", len(svcs)-to+1))
+	}
+	if avail >= len(lines)+len(hint) {
+		lines = append(lines, hint...)
+	}
+	return m.modalBox(lines, w, h, colAccent)
+}
+
+// serviceCols are the column widths of the service list, measured once over
+// every row so the columns line up instead of shifting with each row's content.
+type serviceCols struct {
+	name  int
+	match int
+	right int
+}
+
+func serviceColumns(m *Model, svcs []config.Service, snap config.Settings, w int) serviceCols {
+	c := serviceCols{name: 8}
+	for _, svc := range svcs {
+		if n := width(serviceRowName(svc, snap)); n > c.name {
+			c.name = n
+		}
+		if n := width(serviceRowRight(m, svc, snap)); n > c.right {
+			c.right = n
+		}
+	}
+	if max := w / 3; c.name > max {
+		c.name = max
+	}
+	// The row is: cursor(2) + checkbox(3) + space + name + space + match, then at
+	// least one space before the right column. Getting this budget wrong by one
+	// makes lr drop the right column on the widest row rather than wrap it.
+	const fixed = 2 + 3 + 1 + 1 + 1
+	c.match = w - fixed - c.name - c.right
+	if c.match < 0 {
+		c.match = 0
+	}
+	return c
+}
+
+// serviceRowName is the name column's plain text.
+func serviceRowName(svc config.Service, snap config.Settings) string {
+	if snap.IsShown(config.ServiceChart(svc.Name)) {
+		return svc.Name
+	}
+	return svc.Name + " (hidden)"
+}
+
+// serviceRowRight is the threshold and current value, as plain text, for
+// measuring the column.
+func serviceRowRight(m *Model, svc config.Service, snap config.Settings) string {
+	id := config.ServiceChart(svc.Name)
+	th, hasTh := snap.Threshold(id)
+	p := panel{series: m.series[id], threshold: th, hasThresh: hasTh}
+	value, _ := p.valueText(descriptorFor(id))
+	if p.alerting() {
+		value = "▲ " + value
+	}
+	if hasTh {
+		return "thr " + formatThreshold(id, th) + " · " + value
+	}
+	return value
+}
+
+func (m *Model) serviceRow(svc config.Service, snap config.Settings, selected bool, w int, cols serviceCols) string {
+	id := config.ServiceChart(svc.Name)
+	d := descriptorFor(id)
+	doomed := m.manageSel.isMarked(svc.Name)
+
+	cursor := "  "
+	nameSty := styText
+	if selected {
+		cursor = styAccent.Render("❯ ")
+		nameSty = styAccentB
+	}
+
+	box := styFaint.Render("[ ]")
+	if doomed {
+		box = styAlert.Render("[✗]")
+		nameSty = styAlert
+		if selected {
+			nameSty = styAlertB
+		}
+	} else if !snap.IsShown(id) && !selected {
+		// A hidden chart is still charted; dim it the way the picker does.
+		nameSty = styDim
+	}
+
+	th, hasTh := snap.Threshold(id)
+	p := panel{series: m.series[id], threshold: th, hasThresh: hasTh}
+	value, valueSty := p.valueText(d)
+	if p.alerting() {
+		value = "▲ " + value
+	}
+
+	right := valueSty.Render(value)
+	if hasTh {
+		right = styThreshLn.Render("thr "+formatThreshold(id, th)) +
+			styFaint.Render(" · ") + right
+	}
+	// Padded to the measured column so every row is the same width and the
+	// labels line up, rather than each row's right edge floating with its
+	// content.
+	right = padStyled(right, cols.right)
+
+	// The match is the middle column: it is what you check before removing the
+	// wrong one of two similarly named services.
+	name := truncate(serviceRowName(svc, snap), cols.name)
+	line := cursor + box + " " + padStyled(nameSty.Render(name), cols.name)
+	if cols.match > 4 {
+		line += " " + padStyled(styDim.Render(truncate(svc.Match, cols.match)), cols.match)
+	}
+	return "  " + lr(line, right, w)
 }

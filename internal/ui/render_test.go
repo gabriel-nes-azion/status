@@ -2,6 +2,7 @@ package ui
 
 import (
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -502,6 +503,8 @@ func TestOverlayScrolls(t *testing.T) {
 // against a long service name running into its value.
 func TestOverlayColumnsNeverCollide(t *testing.T) {
 	m := newSized(t, 132, 48)
+	// Deliberately configured without syncSeries: rendering must not depend on
+	// the caller having remembered to create the series first.
 	m.cfg.Update(func(s *config.Settings) {
 		s.AddService(config.Service{Name: "a-very-long-service-name-here", Match: "x"})
 		s.AddService(config.Service{Name: "postgres", Match: "postgres"})
@@ -511,7 +514,6 @@ func TestOverlayColumnsNeverCollide(t *testing.T) {
 	for _, lines := range [][]string{
 		thresholdsOverlay(snap),
 		configOverlay(snap, false, "/tmp/status.toml"),
-		servicesOverlay(snap),
 	} {
 		for _, l := range lines {
 			// A digit or a % landing immediately after a name means the key
@@ -521,6 +523,15 @@ func TestOverlayColumnsNeverCollide(t *testing.T) {
 			}
 		}
 	}
+
+	// The interactive service list has its own columns to keep apart.
+	m.managing = true
+	for _, l := range strings.Split(m.View(), "\n") {
+		if strings.Contains(l, "-here5") || strings.Contains(l, "postgres5") {
+			t.Errorf("service row columns collided: %q", l)
+		}
+	}
+	m.managing = false
 
 	// And the threshold list must actually contain both services.
 	joined := strings.Join(thresholdsOverlay(snap), "\n")
@@ -576,4 +587,107 @@ func TestOverlayDismissalDoesNotLeakKeys(t *testing.T) {
 	if m.screen != config.ScreenServices {
 		t.Error("shift+tab should still switch screens with a panel open")
 	}
+}
+
+func TestDumpServiceList(t *testing.T) {
+	m := newSized(t, 132, 40)
+	seed(m, 400)
+	seedServices(m, 300)
+	m.input.SetValue("/service")
+	m.submit()
+	if !m.managing {
+		t.Fatal("/service did not open the list")
+	}
+	// Mark the second and third rows for removal.
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	t.Log("\n" + m.View())
+}
+
+func TestDumpServiceListEmpty(t *testing.T) {
+	m := newSized(t, 132, 30)
+	seed(m, 400)
+	m.input.SetValue("/service")
+	m.submit()
+	t.Log("\n" + m.View())
+}
+
+// TestServiceListRowsAlign pins the column arithmetic: every row the same width,
+// and no row so wide that its right column gets dropped. Getting the budget
+// wrong by one silently blanked the widest row's value.
+func TestServiceListRowsAlign(t *testing.T) {
+	m := newSized(t, 132, 40)
+	m.cfg.Update(func(s *config.Settings) {
+		s.AddService(config.Service{Name: "a", Match: "a"})
+		s.AddService(config.Service{Name: "redis-server", Match: "redis-server"})
+		s.AddService(config.Service{Name: "postgres", Match: "postgres"})
+	})
+	m.syncSeries(m.cfg.Snapshot())
+	// One healthy, one failing (the widest value), one with no samples at all.
+	m.series[config.ServiceChart("a")].Append(metrics.Sample{Value: 6.3, OK: true})
+	m.series[config.ServiceChart("redis-server")].Append(metrics.Sample{OK: false})
+	m.managing = true
+
+	var rows []string
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "[ ]") || strings.Contains(line, "[✗]") {
+			rows = append(rows, line)
+		}
+	}
+	if len(rows) != 3 {
+		t.Fatalf("found %d rows, want 3:\n%s", len(rows), m.View())
+	}
+
+	first := width(rows[0])
+	for i, r := range rows {
+		if got := width(r); got != first {
+			t.Errorf("row %d is %d cells wide, row 0 is %d:\n%s", i, got, first, r)
+		}
+		// Every row must still carry its value: the failing one is the widest and
+		// the one an off-by-one drops.
+		if !strings.Contains(r, "thr ") {
+			t.Errorf("row %d lost its right column: %q", i, r)
+		}
+	}
+	joined := strings.Join(rows, "\n")
+	for _, want := range []string{"6.3%", "FAIL", "—"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%q missing from the rows:\n%s", want, joined)
+		}
+	}
+
+	// The "thr" labels start at the same visual column on every row. Byte offsets
+	// will not do: the cursor row carries extra escape sequences.
+	col := -1
+	for i, r := range rows {
+		at := visualColumnOf(r, "thr ")
+		if at < 0 {
+			t.Errorf("row %d has no right column: %q", i, r)
+			continue
+		}
+		if col == -1 {
+			col = at
+			continue
+		}
+		if at != col {
+			t.Errorf("row %d starts its right column at %d, row 0 at %d", i, at, col)
+		}
+	}
+}
+
+var ansiPattern = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
+
+// visualColumnOf is the display column where needle starts. A byte offset will
+// not do: the cursor glyph is multi-byte and the styling adds escape sequences,
+// so both have to come out before measuring.
+func visualColumnOf(line, needle string) int {
+	plain := ansiPattern.ReplaceAllString(line, "")
+	at := strings.Index(plain, needle)
+	if at < 0 {
+		return -1
+	}
+	return width(plain[:at])
 }

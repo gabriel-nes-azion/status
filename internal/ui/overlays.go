@@ -43,6 +43,7 @@ func helpOverlay() []string {
 	// commands, and these are short enough to pair up.
 	keys := [][2]string{
 		{"shift+tab", "switch between the main and services screens"},
+		{"space / x", "tick a row in a modal list"},
 		{"tab", "accept the highlighted completion"},
 		{"enter", "run the command, or complete it first"},
 		{"up / down", "move through completions, or command history"},
@@ -153,39 +154,6 @@ func thresholdLines(cfg config.Settings) []string {
 		out = append(out, "  "+kvw(name, formatThreshold(c, v), keyW))
 	}
 	return out
-}
-
-// servicesOverlay lists the charted services and how each one is matched.
-func servicesOverlay(cfg config.Settings) []string {
-	lines := []string{section("services"), ""}
-	if len(cfg.Services) == 0 {
-		return append(lines,
-			"  "+styDim.Render("nothing charted yet."),
-			"",
-			"  "+styFaint.Render("/discover           scan the machine and pick from the list"),
-			"  "+styFaint.Render("/service add <name> chart a process group by hand"),
-		)
-	}
-	for _, svc := range cfg.Services {
-		id := config.ServiceChart(svc.Name)
-		state := styOK.Render("shown")
-		if !cfg.IsShown(id) {
-			state = styFaint.Render("hidden")
-		}
-		where := "name"
-		if svc.Cmdline {
-			where = "name or cmdline"
-		}
-		thr := styFaint.Render("no threshold")
-		if v, ok := cfg.Threshold(id); ok {
-			thr = styThreshLn.Render("thr " + formatThreshold(id, v))
-		}
-		lines = append(lines, "  "+styDim.Render(pad(svc.Name, 18))+
-			styText.Render(pad("match "+svc.Match, 26))+
-			styDim.Render(pad(where, 17))+pad(thr, 20)+state)
-	}
-	return append(lines, "",
-		styFaint.Render("  /service rm <name> to stop charting one · shift+tab for the services screen"))
 }
 
 func timeoutsOverlay(cfg config.Settings) []string {

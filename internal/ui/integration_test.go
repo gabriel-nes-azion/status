@@ -585,6 +585,7 @@ func TestServiceLifecycle(t *testing.T) {
 	if !m.statusErr {
 		t.Error("an unknown subcommand should be rejected")
 	}
+	m.closeManage()
 }
 
 // TestDiscoveryFlow drives the /discover picker with synthetic candidates.
@@ -615,8 +616,8 @@ func TestDiscoveryFlow(t *testing.T) {
 	// "l" ticks everything holding a listening socket.
 	m.Update(discoverMsg{candidates: cands})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	if len(m.chosen) != 2 {
-		t.Errorf("selected %d, want the 2 listening candidates", len(m.chosen))
+	if m.discoverSel.count() != 2 {
+		t.Errorf("selected %d, want the 2 listening candidates", m.discoverSel.count())
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.discovering {
@@ -819,5 +820,220 @@ func TestDiscoverFindsThisProcess(t *testing.T) {
 	}
 	if len(filtered) == 0 || len(filtered) > len(cands) {
 		t.Errorf("filter yielded %d of %d candidates", len(filtered), len(cands))
+	}
+}
+
+// TestServiceListRemoval drives the /service list: it lists by default, and a
+// ticked row is removed only when Enter confirms it.
+func TestServiceListRemoval(t *testing.T) {
+	m := newSized(t, 140, 60)
+	snap := func() config.Settings { return m.cfg.Snapshot() }
+	for _, name := range []string{"nginx", "postgres", "redis"} {
+		m.input.SetValue("/service add " + name)
+		m.submit()
+	}
+	m.syncSeries(snap())
+	if got := len(snap().Services); got != 3 {
+		t.Fatalf("%d services configured, want 3", got)
+	}
+
+	// /service with no argument lists them.
+	m.input.SetValue("/service")
+	m.submit()
+	if !m.managing {
+		t.Fatal("/service should open the list")
+	}
+	if m.statusErr {
+		t.Errorf("/service reported an error: %s", m.status)
+	}
+	// The list owns the keyboard, and says so on the prompt.
+	if out := m.View(); !strings.Contains(out, "managing services") {
+		t.Error("the prompt should say the list has the keyboard")
+	}
+
+	key := func(t tea.KeyType) { m.Update(tea.KeyMsg{Type: t}) }
+	runes := func(s string) { m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+
+	// Marking changes nothing until Enter: a mis-hit space must be harmless.
+	key(tea.KeySpace)
+	if m.manageSel.count() != 1 {
+		t.Errorf("marked %d, want 1", m.manageSel.count())
+	}
+	if got := len(snap().Services); got != 3 {
+		t.Errorf("marking removed something: %d services left", got)
+	}
+
+	// Esc discards the marks entirely.
+	key(tea.KeyEsc)
+	if m.managing {
+		t.Error("esc should close the list")
+	}
+	if got := len(snap().Services); got != 3 {
+		t.Errorf("esc removed something: %d services left", got)
+	}
+
+	// Services are sorted by name: nginx, postgres, redis. Mark the middle one.
+	m.input.SetValue("/service")
+	m.submit()
+	key(tea.KeyDown)
+	key(tea.KeySpace)
+	if !m.manageSel.isMarked("postgres") {
+		t.Fatalf("marked %v, want postgres", m.manageSel.marked)
+	}
+	key(tea.KeyEnter)
+
+	if m.managing {
+		t.Error("enter should close the list")
+	}
+	if _, ok := snap().Service("postgres"); ok {
+		t.Error("postgres should be gone")
+	}
+	for _, keep := range []string{"nginx", "redis"} {
+		if _, ok := snap().Service(keep); !ok {
+			t.Errorf("%s should have been left alone", keep)
+		}
+	}
+	if m.series[config.ServiceChart("postgres")] != nil {
+		t.Error("removal should drop the series")
+	}
+	if _, ok := snap().Thresholds[config.ServiceChart("postgres")]; ok {
+		t.Error("removal should drop the threshold")
+	}
+	if !strings.Contains(m.status, "postgres") {
+		t.Errorf("status = %q, should name what was removed", m.status)
+	}
+
+	// "a" marks everything, and Enter tears the whole set down.
+	m.input.SetValue("/service")
+	m.submit()
+	runes("a")
+	if m.manageSel.count() != 2 {
+		t.Errorf("a marked %d, want 2", m.manageSel.count())
+	}
+	key(tea.KeyEnter)
+	if got := len(snap().Services); got != 0 {
+		t.Errorf("%d services left, want none", got)
+	}
+
+	// With nothing charted the list explains itself instead of looking broken.
+	m.input.SetValue("/service")
+	m.submit()
+	if !m.managing {
+		t.Fatal("/service should still open with no services")
+	}
+	out := m.View()
+	if !strings.Contains(out, "nothing charted yet") || !strings.Contains(out, "/discover") {
+		t.Errorf("empty list should point the way out:\n%s", out)
+	}
+	key(tea.KeyEnter) // must not blow up on an empty list
+	if m.managing {
+		t.Error("enter should close the empty list")
+	}
+}
+
+// TestServiceListEnterWithNoMarks closes without touching anything, and without
+// claiming it did something.
+func TestServiceListEnterWithNoMarks(t *testing.T) {
+	m := newSized(t, 140, 60)
+	m.input.SetValue("/service add nginx")
+	m.submit()
+	m.setStatus("", false)
+
+	m.input.SetValue("/service")
+	m.submit()
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.managing {
+		t.Error("enter should close the list")
+	}
+	if _, ok := m.cfg.Snapshot().Service("nginx"); !ok {
+		t.Error("nginx should still be charted")
+	}
+	if m.status != "" {
+		t.Errorf("status = %q, want nothing claimed", m.status)
+	}
+}
+
+// TestServiceListKeysDoNotLeak: the list is modal, like the others.
+func TestServiceListKeysDoNotLeak(t *testing.T) {
+	m := newSized(t, 140, 60)
+	m.input.SetValue("/service add nginx")
+	m.submit()
+	m.input.SetValue("/service")
+	m.submit()
+
+	for _, r := range []string{"h", "o", "s", "t", "/"} {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(r)})
+	}
+	if m.input.Value() != "" {
+		t.Errorf("keys leaked into the prompt: %q", m.input.Value())
+	}
+	// j/k move the cursor like the other lists.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.manageSel.idx != 0 {
+		t.Errorf("j on a one-row list moved to %d", m.manageSel.idx)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if m.managing {
+		t.Error("q should close the list")
+	}
+}
+
+// TestSelectionMechanics covers the shared cursor and marked set directly, since
+// two lists now depend on it behaving the same way.
+func TestSelectionMechanics(t *testing.T) {
+	s := newSelection()
+
+	s.move(1, 3)
+	s.move(1, 3)
+	if s.idx != 2 {
+		t.Errorf("idx = %d, want 2", s.idx)
+	}
+	s.move(1, 3) // wraps
+	if s.idx != 0 {
+		t.Errorf("idx = %d after wrapping forward, want 0", s.idx)
+	}
+	s.move(-1, 3) // wraps the other way
+	if s.idx != 2 {
+		t.Errorf("idx = %d after wrapping back, want 2", s.idx)
+	}
+
+	// An empty list parks the cursor rather than going negative.
+	s.move(-1, 0)
+	if s.idx != 0 {
+		t.Errorf("idx = %d on an empty list", s.idx)
+	}
+
+	// A list that shrank under the cursor is clamped, not left dangling.
+	s.idx = 9
+	s.clamp(3)
+	if s.idx != 2 {
+		t.Errorf("idx = %d after clamping to 3, want 2", s.idx)
+	}
+	s.clamp(0)
+	if s.idx != 0 {
+		t.Errorf("idx = %d after clamping to 0", s.idx)
+	}
+
+	s.toggle("a")
+	s.mark("b")
+	s.mark("b") // idempotent
+	if s.count() != 2 || !s.isMarked("a") || !s.isMarked("b") {
+		t.Errorf("marked = %v", s.marked)
+	}
+	s.toggle("a") // toggles off
+	if s.isMarked("a") || s.count() != 1 {
+		t.Errorf("marked = %v after toggling a off", s.marked)
+	}
+	s.reset()
+	if s.count() != 0 || s.idx != 0 {
+		t.Errorf("reset left idx=%d marked=%v", s.idx, s.marked)
+	}
+
+	// A zero-value selection must not panic on first use.
+	var zero selection
+	zero.toggle("x")
+	if !zero.isMarked("x") {
+		t.Error("a zero-value selection did not take a mark")
 	}
 }

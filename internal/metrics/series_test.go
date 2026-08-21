@@ -80,3 +80,23 @@ func TestSeriesResetKeepsCapacity(t *testing.T) {
 		t.Errorf("capacity changed: len = %d, want 4", s.Len())
 	}
 }
+
+// TestNilSeriesReadsAsEmpty covers the case that used to crash the renderer: a
+// chart whose series has not been created yet must read as "no data" rather than
+// panic. Writes are deliberately left panicking.
+func TestNilSeriesReadsAsEmpty(t *testing.T) {
+	var s *Series
+
+	if got := s.Len(); got != 0 {
+		t.Errorf("Len() = %d", got)
+	}
+	if got := s.Tail(10); got != nil {
+		t.Errorf("Tail() = %v", got)
+	}
+	if _, ok := s.Last(); ok {
+		t.Error("Last() reported a sample")
+	}
+	if got := s.Stats(10); got != (Stats{}) {
+		t.Errorf("Stats() = %+v", got)
+	}
+}
