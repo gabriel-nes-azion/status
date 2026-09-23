@@ -207,7 +207,7 @@ func axisMax(d descriptor, observed float64) float64 {
 	if d.floorMax > max {
 		max = d.floorMax
 	}
-	if d.unit == metrics.UnitBytesPerSec {
+	if d.unit == metrics.UnitBytesPerSec || d.unit == metrics.UnitBytes {
 		return metrics.NiceCeilBinary(max)
 	}
 	return metrics.NiceCeil(max)

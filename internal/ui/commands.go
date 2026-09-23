@@ -462,9 +462,7 @@ func init() {
 					return "", nil, fmt.Errorf("history must be an integer >= 10")
 				}
 				m.cfg.Update(func(c *config.Settings) { c.History = n })
-				for _, s := range m.series {
-					s.Resize(n)
-				}
+				m.eachSeries(func(s *metrics.Series) { s.Resize(n) })
 				return fmt.Sprintf("history set to %d samples per series", n), nil, nil
 			},
 		},
@@ -540,10 +538,10 @@ func init() {
 				m.cfg.Replace(def)
 				m.prober.ResetCapabilities()
 				m.syncSeries(def)
-				for _, s := range m.series {
+				m.eachSeries(func(s *metrics.Series) {
 					s.Reset()
 					s.Resize(def.History)
-				}
+				})
 				return "configuration reset to defaults", tea.Batch(m.scheduleSystem(), m.scheduleChecks(), m.runChecks()), nil
 			},
 		},

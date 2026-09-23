@@ -1,7 +1,7 @@
 // Command status is a terminal dashboard that plots local system resources, the
-// latency of a remote endpoint and the CPU share of the services running on the
-// machine on shared ASCII timelines, driven by slash commands typed inside the
-// TUI.
+// latency of a remote endpoint and the CPU and memory of the services running on
+// the machine on shared ASCII timelines, driven by slash commands typed inside
+// the TUI.
 package main
 
 import (

@@ -27,6 +27,9 @@ const (
 	// minChartWidth is the narrowest timeline still worth plotting; below this
 	// the information block gives up columns instead.
 	minChartWidth = 12
+	// gutterWidth is the divider between a service row's two chart columns: a
+	// space, the rule, a space, matching the information block's own rule.
+	gutterWidth   = 3
 	minInfoWidth  = 14
 	maxSuggestion = 7
 	// pickerRowWidth caps how wide a /show row gets before its value would drift
@@ -51,6 +54,10 @@ type layout struct {
 	chartW int
 	chartH int
 	gridH  int
+	// memW is the width of the second chart column on a service row, and zero
+	// when rows carry a single chart — on the main screen, or on a terminal too
+	// narrow to split one.
+	memW int
 
 	// sections holds only the visible metrics, so the grid never has to consult
 	// the hidden set again while rendering.
@@ -181,11 +188,24 @@ func (m *Model) resolveLayout(innerW, gridH int, sections []config.Section, rows
 		chartH = 1
 	}
 
+	// A service row answers two questions, so its chart area is split in two:
+	// CPU share on the left, resident memory on the right. Below the width where
+	// both halves would still be readable the memory column is dropped rather
+	// than both timelines squeezed into noise.
+	chartW, memW := innerW-infoW, 0
+	if m.screen == config.ScreenServices {
+		if avail := chartW - gutterWidth; avail >= 2*minChartWidth {
+			memW = avail / 2
+			chartW = avail - memW // the odd column goes to CPU, the primary one
+		}
+	}
+
 	return layout{
 		innerW:   innerW,
 		rowH:     rowH,
 		infoW:    infoW,
-		chartW:   innerW - infoW,
+		chartW:   chartW,
+		memW:     memW,
 		chartH:   chartH,
 		gridH:    gridH,
 		sections: sections,
@@ -240,7 +260,7 @@ func sectionHeading(name string, w int) string {
 
 func (m *Model) renderPanel(c config.ChartID, l layout, snap config.Settings) string {
 	th, hasTh := snap.Threshold(c)
-	return panel{
+	p := panel{
 		chart:     c,
 		title:     snap.ChartTitle(c),
 		series:    m.series[c],
@@ -252,7 +272,11 @@ func (m *Model) renderPanel(c config.ChartID, l layout, snap config.Settings) st
 		infoW:     l.infoW,
 		chartW:    l.chartW,
 		chartH:    l.chartH,
-	}.render()
+	}
+	if c.IsService() {
+		p.memSeries, p.memW = m.memSeries[c], l.memW
+	}
+	return p.render()
 }
 
 func (m *Model) renderTopBar(w int, l layout) string {
@@ -274,27 +298,38 @@ func (m *Model) renderTopBar(w int, l layout) string {
 	}
 
 	alerts, hidden := m.alertCount(snap)
-	var state string
+	stateText, stateSty := "● OK", styOK
+	var extra string
 	switch {
 	case m.paused:
-		state = styPaused.Render("⏸ PAUSED")
+		stateText, stateSty = "⏸ PAUSED", styPaused
 	case alerts > 0:
 		word := "ALERT"
 		if alerts > 1 {
 			word = "ALERTS"
 		}
-		state = styAlertB.Render(fmt.Sprintf("▲ %d %s", alerts, word))
+		stateText, stateSty = fmt.Sprintf("▲ %d %s", alerts, word), styAlertB
 		if hidden > 0 {
 			// Hiding a chart, or leaving it on the other screen, must not
 			// silence it.
-			state += styAlert.Render(fmt.Sprintf(" (+%d unseen)", hidden))
+			extra = styAlert.Render(fmt.Sprintf(" (+%d unseen)", hidden))
 		}
 	case hidden > 0:
-		state = styAlertB.Render(fmt.Sprintf("▲ %d UNSEEN", hidden))
-	default:
-		state = styOK.Render("● OK")
+		stateText, stateSty = fmt.Sprintf("▲ %d UNSEEN", hidden), styAlertB
 	}
-	right := state + styFaint.Render("  "+time.Now().Format("15:04:05"))
+	state := stateSty.Render(stateText)
+	clock := styFaint.Render("  " + time.Now().Format("15:04:05"))
+
+	// The right-hand side gives ground too on a narrow terminal, least
+	// important first: the clock, then the unseen count. The state itself is
+	// the one thing on the bar that must never be dropped.
+	right := state + extra + clock
+	for _, cand := range []string{state + extra, state} {
+		if width(right) <= w {
+			break
+		}
+		right = cand
+	}
 	rw := width(right)
 
 	left := strings.Join(segments, sep)
@@ -307,9 +342,12 @@ func (m *Model) renderTopBar(w int, l layout) string {
 		// Only the host is left and it still does not fit: truncate it.
 		left = styAccentB.Render("STATUS") + sep + styText.Render(truncate(snap.Host, max(1, w-rw-12)))
 		gap = w - width(left) - rw
-		if gap < 1 {
-			gap = 1
-		}
+	}
+	if gap < 1 {
+		// Not even the state and a one-cell gap fit. Everything but the state
+		// goes, and the state itself is cut to the terminal rather than wrapped:
+		// a bar that overruns takes the whole frame with it.
+		return stateSty.Render(truncate(stateText, w))
 	}
 	return left + strings.Repeat(" ", gap) + right
 }

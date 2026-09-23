@@ -44,8 +44,11 @@ type Model struct {
 	svcColl *metrics.ServiceCollector
 
 	series map[config.ChartID]*metrics.Series
-	detail map[config.ChartID]string
-	errmsg map[config.ChartID]string
+	// memSeries is the second timeline of a service row: resident memory, keyed
+	// by the same chart id as its CPU series.
+	memSeries map[config.ChartID]*metrics.Series
+	detail    map[config.ChartID]string
+	errmsg    map[config.ChartID]string
 
 	// screen is the page on show. Every chart keeps collecting regardless, so
 	// switching screens never loses history.
@@ -122,16 +125,17 @@ func New(cfg *config.Config) *Model {
 
 	coll := metrics.NewCollector()
 	m := &Model{
-		cfg:      cfg,
-		prober:   probe.New(),
-		coll:     coll,
-		svcColl:  metrics.NewServiceCollector(coll.Cores()),
-		series:   make(map[config.ChartID]*metrics.Series, len(config.Order)),
-		detail:   make(map[config.ChartID]string, len(config.Order)),
-		errmsg:   make(map[config.ChartID]string, len(config.Order)),
-		inflight: make(map[config.Metric]bool, len(config.Probes)),
-		input:    ti,
-		chartW:   60,
+		cfg:       cfg,
+		prober:    probe.New(),
+		coll:      coll,
+		svcColl:   metrics.NewServiceCollector(coll.Cores()),
+		series:    make(map[config.ChartID]*metrics.Series, len(config.Order)),
+		memSeries: make(map[config.ChartID]*metrics.Series),
+		detail:    make(map[config.ChartID]string, len(config.Order)),
+		errmsg:    make(map[config.ChartID]string, len(config.Order)),
+		inflight:  make(map[config.Metric]bool, len(config.Probes)),
+		input:     ti,
+		chartW:    60,
 	}
 	m.discoverSel = newSelection()
 	m.manageSel = newSelection()
@@ -149,13 +153,31 @@ func (m *Model) syncSeries(snap config.Settings) {
 		if m.series[c] == nil {
 			m.series[c] = metrics.NewSeries(snap.History)
 		}
+		// A service row charts CPU and memory side by side, so it carries a
+		// second series that has to be created and dropped with the first.
+		if c.IsService() && m.memSeries[c] == nil {
+			m.memSeries[c] = metrics.NewSeries(snap.History)
+		}
 	}
 	for c := range m.series {
 		if !live[c] {
 			delete(m.series, c)
+			delete(m.memSeries, c)
 			delete(m.detail, c)
 			delete(m.errmsg, c)
 		}
+	}
+}
+
+// eachSeries visits every series the model holds, the services' memory ones
+// included, so resizing or clearing history never leaves half a service row
+// behind.
+func (m *Model) eachSeries(fn func(*metrics.Series)) {
+	for _, s := range m.series {
+		fn(s)
+	}
+	for _, s := range m.memSeries {
+		fn(s)
 	}
 }
 
@@ -393,25 +415,31 @@ func (m *Model) applySystem(s metrics.SystemSnapshot) {
 	set(config.Net, s.NetRate, s.NetDetail, s.NetErr, s.Warmup)
 }
 
-// applyService records one service sample.
+// applyService records one service sample across both of its charts.
 func (m *Model) applyService(s metrics.ServiceSample) {
 	c := config.ServiceChart(s.Name)
-	series := m.series[c]
-	if series == nil {
+	series, mem := m.series[c], m.memSeries[c]
+	if series == nil || mem == nil {
 		return // the service was removed while its sample was in flight
 	}
+	now := time.Now()
 	if s.Err != nil {
 		m.errmsg[c] = s.Err.Error()
-		series.Append(metrics.Sample{At: time.Now(), OK: false})
+		series.Append(metrics.Sample{At: now, OK: false})
+		mem.Append(metrics.Sample{At: now, OK: false})
 		return
 	}
 	m.errmsg[c] = ""
-	m.detail[c] = fmt.Sprintf("%d pid · %.2f cores · %s",
-		s.PIDs, s.Cores, metrics.FormatBytes(float64(s.MemBytes)))
+	// Memory has its own chart now, so the detail line carries what neither
+	// chart shows.
+	m.detail[c] = fmt.Sprintf("%d pid · %.2f cores", s.PIDs, s.Cores)
+	// Resident memory is an instantaneous reading, so it is recorded from the
+	// very first sample, where the CPU rate still has nothing to diff against.
+	mem.Append(metrics.Sample{At: now, Value: float64(s.MemBytes), OK: true})
 	if s.Warmup {
 		return // no previous counter to diff against yet
 	}
-	series.Append(metrics.Sample{At: time.Now(), Value: s.CPUPercent, OK: true})
+	series.Append(metrics.Sample{At: now, Value: s.CPUPercent, OK: true})
 }
 
 // applyDiscovery opens the candidate list, or reports why it could not.
@@ -507,9 +535,7 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.runChecks(), m.collectServices())
 
 	case tea.KeyCtrlL:
-		for _, s := range m.series {
-			s.Reset()
-		}
+		m.eachSeries(func(s *metrics.Series) { s.Reset() })
 		m.setStatus("history cleared", false)
 		return m, nil
 

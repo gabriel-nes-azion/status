@@ -20,6 +20,9 @@ var (
 	colOK      = lipgloss.Color("78")
 	colAccent  = lipgloss.Color("111")
 	colWarnDot = lipgloss.Color("137")
+	// colMemChart is memory's hue wherever it is charted: the MEMORY panel and
+	// the memory column of every service row.
+	colMemChart = lipgloss.Color("140")
 )
 
 var (
@@ -51,7 +54,7 @@ type descriptor struct {
 
 var descriptors = map[config.Metric]descriptor{
 	config.CPU:     {unit: metrics.UnitPercent, fg: lipgloss.Color("80"), fixedMax: 100},
-	config.Mem:     {unit: metrics.UnitPercent, fg: lipgloss.Color("140"), fixedMax: 100},
+	config.Mem:     {unit: metrics.UnitPercent, fg: colMemChart, fixedMax: 100},
 	config.Disk:    {unit: metrics.UnitPercent, fg: lipgloss.Color("68"), fixedMax: 100},
 	config.DiskIO:  {unit: metrics.UnitBytesPerSec, fg: lipgloss.Color("179"), floorMax: 1 << 20},
 	config.Net:     {unit: metrics.UnitBytesPerSec, fg: lipgloss.Color("108"), floorMax: 128 << 10},
@@ -69,6 +72,19 @@ var servicePalette = []lipgloss.Color{
 	lipgloss.Color("175"), lipgloss.Color("109"), lipgloss.Color("144"),
 	lipgloss.Color("173"), lipgloss.Color("115"), lipgloss.Color("141"),
 	lipgloss.Color("209"),
+}
+
+// serviceMemDescriptor is the presentation of a service row's memory column.
+// The axis follows the data — resident sizes span kilobytes to gigabytes across
+// services, so a fixed scale would flatten most of them — floored at 64M so an
+// idle service does not draw its own noise as a mountain.
+//
+// Every service's memory chart takes the same hue, the one the built-in MEMORY
+// panel uses. Only the CPU column carries the per-service colour: with two
+// charts on a row, telling the columns apart matters more than telling the rows
+// apart, which the title already does.
+func serviceMemDescriptor() descriptor {
+	return descriptor{unit: metrics.UnitBytes, fg: colMemChart, floorMax: 64 << 20}
 }
 
 func descriptorFor(c config.ChartID) descriptor {

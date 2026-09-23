@@ -13,6 +13,9 @@ const (
 	UnitPercent Unit = iota
 	UnitBytesPerSec
 	UnitMillis
+	// UnitBytes is an absolute size rather than a rate: resident memory, where
+	// "128M" means the process is holding that much, not moving it per second.
+	UnitBytes
 )
 
 // Format renders v in its unit, using a compact fixed-ish width.
@@ -24,6 +27,8 @@ func (u Unit) Format(v float64) string {
 		return FormatRate(v)
 	case UnitMillis:
 		return FormatMillis(v)
+	case UnitBytes:
+		return FormatBytes(v)
 	}
 	return fmt.Sprintf("%.2f", v)
 }
@@ -40,6 +45,8 @@ func (u Unit) FormatAxis(v float64) string {
 			return fmt.Sprintf("%.1fs", v/1000)
 		}
 		return fmt.Sprintf("%.0fms", v)
+	case UnitBytes:
+		return FormatBytes(v)
 	}
 	return fmt.Sprintf("%.0f", v)
 }

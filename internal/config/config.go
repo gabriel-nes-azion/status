@@ -143,7 +143,7 @@ func chartsOf(ms []Metric) []ChartID {
 	return out
 }
 
-// Service is a process group whose CPU share is charted. Match is a
+// Service is a process group whose CPU share and memory are charted. Match is a
 // case-insensitive substring; it is tested against the process name and, when
 // Cmdline is set, against the full command line too — which is what it takes to
 // tell two JVMs or two python workers apart.

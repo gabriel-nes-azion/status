@@ -14,6 +14,10 @@ import (
 // metric's numbers line up in a single readable column, and the timeline chart
 // filling the rest of the line.
 //
+// A service row carries two charts instead of one — CPU on the left, resident
+// memory on the right — because "is this service busy" and "is this service
+// growing" are different questions and the answers are only useful together.
+//
 // The bottom line of a row is deliberately left blank in the chart column: with
 // consecutive charts touching, nine stacked area charts read as one solid block.
 type panel struct {
@@ -25,11 +29,20 @@ type panel struct {
 	threshold float64
 	hasThresh bool
 
+	// memSeries is the second column's data, set only for service rows. With
+	// memW it decides whether the chart area is split at all: a terminal too
+	// narrow for two readable timelines keeps the single CPU one.
+	memSeries *metrics.Series
+
 	rowH   int // total lines in the row, including the chart's blank last line
 	infoW  int // width of the information block; the chart starts at this offset
 	chartW int
 	chartH int
+	memW   int
 }
+
+// split reports whether this row draws the memory column beside the CPU one.
+func (p panel) split() bool { return p.memW > 0 && p.memSeries != nil }
 
 // alerting reports whether the most recent sample breaches the threshold or the
 // check failed, which is what turns the row red.
@@ -50,7 +63,7 @@ func (p panel) render() string {
 	max := axisMax(d, stats.Max)
 
 	info := p.info(d, stats, max)
-	rows := p.chartAt(d, p.chartW, p.chartH, max)
+	rows := p.chartColumns(d, max)
 
 	lines := make([]string, p.rowH)
 	for i := range lines {
@@ -114,19 +127,36 @@ func (p panel) infoText(d descriptor, stats metrics.Stats, max float64, w int) [
 		thr = styThreshLn.Render("thr " + formatThreshold(p.chart, p.threshold))
 	}
 
+	statsLine := lr(indent+styDim.Render(p.statsText(d, stats)), p.failText(stats), w)
+	memLine := p.memLine(w, indent)
+
 	switch {
 	case ih >= 4:
 		lines := []string{
 			lr(head, axis, w),
 			lr(valueLine, thr, w),
-			lr(indent+styDim.Render(p.statsText(d, stats)), p.failText(stats), w),
+		}
+		// With two charts on the row the memory column needs its own value and
+		// axis; at exactly four lines it takes the avg/max summary's place
+		// rather than the detail line's, which is where errors are reported.
+		if memLine == "" || ih >= 5 {
+			lines = append(lines, statsLine)
+		}
+		if memLine != "" {
+			lines = append(lines, memLine)
 		}
 		return append(lines, p.detailLines(w, indent, ih-len(lines))...)
 	case ih == 3:
-		return append([]string{
+		lines := []string{
 			lr(head, axis, w),
 			lr(valueLine, thr, w),
-		}, p.detailLines(w, indent, 1)...)
+		}
+		// Three lines is a choice between the memory numbers and the detail
+		// line; a failing service says so there, and that always wins.
+		if memLine != "" && p.lastErr == "" {
+			return append(lines, memLine)
+		}
+		return append(lines, p.detailLines(w, indent, 1)...)
 	case ih == 2:
 		return append([]string{
 			lr(head, valueSty.Render(value), w),
@@ -188,6 +218,62 @@ func (p panel) detailLines(w int, indent string, n int) []string {
 		out = append(out, strings.Repeat(" ", w))
 	}
 	return out
+}
+
+// chartColumns renders the row's chart area: one timeline, or — on a service
+// row wide enough to split — CPU and memory side by side, divided by the same
+// faint rule that separates the information block from the charts.
+func (p panel) chartColumns(d descriptor, max float64) []string {
+	rows := p.chartAt(d, p.chartW, p.chartH, max)
+	if !p.split() {
+		return rows
+	}
+
+	md, memMax := p.memAxis()
+	mem := chart{
+		samples: p.memSeries.Tail(p.memW),
+		width:   p.memW,
+		height:  p.chartH,
+		max:     memMax,
+		fg:      md.fg,
+		// The threshold belongs to the CPU column: a service alerts on the CPU
+		// share it is configured with, and painting the memory chart red for it
+		// would claim a breach that was never measured.
+	}.render()
+
+	// The gutter repeats the rule the information block uses, so the row reads
+	// as three columns rather than as one chart with a gap in it.
+	gutter := " " + styFaint.Render("│") + " "
+	out := make([]string, len(rows))
+	for i := range rows {
+		out[i] = rows[i] + gutter
+		if i < len(mem) {
+			out[i] += mem[i]
+		}
+	}
+	return out
+}
+
+// memAxis is the memory column's presentation and the scale it is drawn at.
+func (p panel) memAxis() (descriptor, float64) {
+	d := serviceMemDescriptor()
+	return d, axisMax(d, p.memSeries.Stats(p.memW).Max)
+}
+
+// memLine reports the memory column's newest value and its axis maximum, so the
+// second chart can be read as numbers and not only as a shape.
+func (p panel) memLine(w int, indent string) string {
+	if !p.split() {
+		return ""
+	}
+	d, memMax := p.memAxis()
+	value, sty := "—", styDim
+	if last, ok := p.memSeries.Last(); ok && last.OK {
+		value, sty = d.unit.Format(last.Value), styText
+	}
+	label := lipgloss.NewStyle().Foreground(d.fg).Render("mem")
+	return lr(indent+label+" "+sty.Render(value),
+		styFaint.Render("⌃"+d.unit.FormatAxis(memMax)), w)
 }
 
 // chartAt renders the timeline at an explicit width and height.

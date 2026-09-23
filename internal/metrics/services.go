@@ -40,7 +40,7 @@ type serviceState struct {
 	at         time.Time
 }
 
-// ServiceCollector charts the CPU share of process groups.
+// ServiceCollector charts the CPU share and resident memory of process groups.
 //
 // Per-process CPU is derived from the cumulative user+system time counters and
 // diffed between samples. gopsutil's CPUPercent averages over the process's

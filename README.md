@@ -1,8 +1,9 @@
 # status
 
 A terminal dashboard that plots local system resources, the latency of a remote
-endpoint, and the CPU share of the services running on the machine — on shared
-ASCII timelines, driven by Claude-style slash commands typed inside the TUI.
+endpoint, and the CPU and memory of the services running on the machine — on
+shared ASCII timelines, driven by Claude-style slash commands typed inside the
+TUI.
 
 Everything relevant is on one screen on purpose: the point is to watch local
 pressure, remote latency and per-service load at the same time and see which one
@@ -30,21 +31,23 @@ moved first.
    /interval <duration>   how often the network checks run (default 5s)
 ```
 
-`Shift+Tab` switches to the services screen:
+`Shift+Tab` switches to the services screen, where every row carries two charts:
+CPU share on the left, resident memory on the right.
 
 ```
- STATUS  ·  MAIN(9)/SERVICES(4)  ·  https://status.azion.app/  ·  checks 5s  ·  sys 1s   ▲ 1 ALERT (+2 unseen)
+ STATUS  ·  MAIN(9)/SERVICES(2)  ·  https://status.azion.app/  ·  checks 5s   ▲ 1 ALERT (+2 unseen)
 
  SERVICES ─────────────────────────────────────────────────────────────────────────────────
- ● NODE                ⌃100% │                    ▁▃▃▄▄▄▃▂▁                    ▁▁▃▃▄▄▄▃▂▁
-   32.4%           thr 50.0% │                ▂▄▆███████████▆▄▂             ▂▄▆███████████
-   avg 59% · max 93%         │            ▁▃▅██████████████████▇▅▂▁     ▁▃▅█████████████████
-   3 pid · 4.96 cores · 892M │ ███▇▅▄▃▂▂▁▂▂▃▄▆████████████████████████▄▆████████████████████
-                             │ ████████████████████████████████████████████████████████████
- ● REDIS-SERVER        ⌃100% │                                                       ░░░░░
-   FAIL            thr 50.0% │                                                       ░░░░░
-   avg 4% · max 6%        ✕5 │ ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌ ░░░░░
-   ✕ no process matching "r… │ ▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁░░░░░
+ ● NODE                ⌃100% │ ▁▃▃▄▄▄▃▂▁                     │
+   32.4%           thr 50.0% │ ██████████▆▄▂                 │
+   avg 64% · max 93%         │ █████████████▇▅▂              │
+   mem 1.0G            ⌃2.0G │ █████████████████▆▃▁          │ ▄▄▄▄▄▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅
+   3 pid · 4.96 cores        │ ████████████████████▇▅▄▃▂▁▁▂▂ │ ████████████████████████████
+ ● REDIS-SERVER        ⌃100% │                         ░░░░░ │                        ░░░░░
+   FAIL            thr 50.0% │                         ░░░░░ │ ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂░░░░░
+   avg 5% · max 6%        ✕5 │                         ░░░░░ │ ███████████████████████░░░░░
+   mem —                ⌃64M │ ╌  ╌  ╌  ╌  ╌  ╌  ╌  ╌  ░░░░░ │ ███████████████████████░░░░░
+   ✕ no process matching "r… │ ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▂▂▂▂▂▂▁▁▁▁░░░░░ │ ███████████████████████░░░░░
 ```
 
 ## What it measures
@@ -72,9 +75,13 @@ Nine charts, all visible at once, all plotted as timelines, in two sections.
 
 **Services** — process groups you pick, on the second screen:
 
-| Chart | Source | Notes |
+| Column | Source | Notes |
 | --- | --- | --- |
-| one per service | CPU share of every matching process | detail line shows pid count, cores and RSS |
+| CPU | share of the machine's CPU across every matching process | `thr` and the alert state come from this one |
+| memory | resident memory summed across the same processes | axis follows the data, floored at 64M |
+
+One row per service, split into the two columns. The detail line carries what
+neither chart shows: the pid count and the raw figure in cores.
 
 Nothing is charted there until you add something. `/discover` scans the machine
 and lets you pick from a ranked list; `/service add` does it by hand; `/service`
@@ -284,10 +291,20 @@ process name and — for a match containing a space or a `/` — against the ful
 command line too, which is what it takes to tell two JVMs apart. Every matching
 process is summed, so a five-worker nginx is one chart.
 
-**What the number means.** The share of the whole machine's CPU capacity, on the
-same 0–100 scale as the `CPU` chart, so the two can be read against each other.
-The detail line also gives the raw figure in cores, which is what `top` would
-show you: `3 pid · 4.96 cores · 892M`.
+**What the numbers mean.** The CPU column is the share of the whole machine's CPU
+capacity, on the same 0–100 scale as the `CPU` chart, so the two can be read
+against each other. The detail line also gives the raw figure in cores, which is
+what `top` would show you: `3 pid · 4.96 cores`.
+
+The memory column is resident memory (RSS) summed across the matching processes,
+which is the number to watch for a leak. Its axis follows the data rather than
+the machine's total — resident sizes span kilobytes to gigabytes across services,
+and a shared scale would flatten most of them into nothing — so read the `⌃`
+label before comparing two rows. The threshold and the alert state belong to the
+CPU column alone: nothing on the memory chart turns red on its own.
+
+Below the width where two timelines would still be readable, the memory column is
+dropped and the row keeps the single CPU chart.
 
 The rate comes from diffing the processes' cumulative CPU time counters between
 samples. gopsutil's own `CPUPercent` averages over each process's whole lifetime

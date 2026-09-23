@@ -496,6 +496,52 @@ func TestPickerKeys(t *testing.T) {
 	}
 }
 
+// TestServiceSampleFillsBothCharts covers the split row's data path: memory is
+// an instantaneous reading and lands on the very first sample, while CPU has to
+// wait for a second one to diff against, and a vanished process fails both
+// charts rather than only the CPU one.
+func TestServiceSampleFillsBothCharts(t *testing.T) {
+	m := newSized(t, 132, 40)
+	m.cfg.Update(func(s *config.Settings) {
+		s.AddService(config.Service{Name: "nginx", Match: "nginx"})
+	})
+	m.syncSeries(m.cfg.Snapshot())
+	id := config.ServiceChart("nginx")
+
+	m.Update(svcResultMsg{samples: []metrics.ServiceSample{
+		{Name: "nginx", MemBytes: 148 << 20, PIDs: 5, Warmup: true},
+	}})
+	if got := m.series[id].Len(); got != 0 {
+		t.Errorf("CPU recorded %d samples during warmup, want 0", got)
+	}
+	if got := m.memSeries[id].Len(); got != 1 {
+		t.Errorf("memory recorded %d samples during warmup, want 1", got)
+	}
+
+	m.Update(svcResultMsg{samples: []metrics.ServiceSample{
+		{Name: "nginx", CPUPercent: 12, Cores: 0.96, MemBytes: 160 << 20, PIDs: 5},
+	}})
+	if last, _ := m.memSeries[id].Last(); !last.OK || last.Value != float64(160<<20) {
+		t.Errorf("memory sample = %+v, want 160M", last)
+	}
+	if last, _ := m.series[id].Last(); !last.OK || last.Value != 12 {
+		t.Errorf("CPU sample = %+v, want 12%%", last)
+	}
+	// Memory has its own chart, so the detail line no longer repeats it.
+	if strings.Contains(m.detail[id], "M") {
+		t.Errorf("detail line still carries the memory figure: %q", m.detail[id])
+	}
+
+	m.Update(svcResultMsg{samples: []metrics.ServiceSample{
+		{Name: "nginx", Err: context.DeadlineExceeded},
+	}})
+	cpu, _ := m.series[id].Last()
+	mem, _ := m.memSeries[id].Last()
+	if cpu.OK || mem.OK {
+		t.Errorf("a vanished service must fail both charts: cpu %+v, mem %+v", cpu, mem)
+	}
+}
+
 // TestServiceLifecycle covers adding, charting and removing a service by hand.
 func TestServiceLifecycle(t *testing.T) {
 	m := newSized(t, 140, 60)
@@ -524,8 +570,8 @@ func TestServiceLifecycle(t *testing.T) {
 	if _, ok := snap().Service("nginx"); !ok {
 		t.Fatal("nginx not registered")
 	}
-	if m.series[id] == nil {
-		t.Error("adding a service should create its series")
+	if m.series[id] == nil || m.memSeries[id] == nil {
+		t.Error("adding a service should create both of its series")
 	}
 	if th, ok := snap().Threshold(id); !ok || th != snap().ServiceThreshold {
 		t.Errorf("threshold = %v (set %v), want the %v default", th, ok, snap().ServiceThreshold)
@@ -568,8 +614,8 @@ func TestServiceLifecycle(t *testing.T) {
 	if _, ok := snap().Service("nginx"); ok {
 		t.Error("nginx still registered")
 	}
-	if m.series[id] != nil {
-		t.Error("removing a service should drop its series")
+	if m.series[id] != nil || m.memSeries[id] != nil {
+		t.Error("removing a service should drop both of its series")
 	}
 	if _, ok := snap().Thresholds[id]; ok {
 		t.Error("removing a service should drop its threshold")
@@ -768,6 +814,9 @@ func TestServiceCPUIsCollected(t *testing.T) {
 	}
 	if second[0].CPUPercent > 100 {
 		t.Errorf("cpu share %v exceeds the whole machine", second[0].CPUPercent)
+	}
+	if second[0].MemBytes == 0 {
+		t.Error("a live process group must report resident memory: the row charts it")
 	}
 
 	// A spec matching nothing is an error, not a silent zero.

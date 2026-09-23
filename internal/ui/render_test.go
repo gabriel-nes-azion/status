@@ -354,10 +354,13 @@ func TestPromptLooksInactiveDuringPicker(t *testing.T) {
 	}
 }
 
-// seedServices configures a few services and fills their charts.
+// seedServices configures a few services and fills both charts of each row.
 func seedServices(m *Model, n int) {
 	names := []string{"nginx", "postgres", "redis-server", "node"}
 	base := map[string]float64{"nginx": 12, "postgres": 34, "redis-server": 4, "node": 62}
+	mem := map[string]float64{
+		"nginx": 148 << 20, "postgres": 1100 << 20, "redis-server": 40 << 20, "node": 892 << 20,
+	}
 	for _, name := range names {
 		m.cfg.Update(func(s *config.Settings) {
 			s.AddService(config.Service{Name: name, Match: name})
@@ -374,14 +377,18 @@ func seedServices(m *Model, n int) {
 			if name == "redis-server" && i > n-6 {
 				ok = false // simulate the process going away
 			}
-			m.series[c].Append(metrics.Sample{
-				At: now.Add(time.Duration(i-n) * time.Second), Value: base[name] * wave, OK: ok,
+			at := now.Add(time.Duration(i-n) * time.Second)
+			m.series[c].Append(metrics.Sample{At: at, Value: base[name] * wave, OK: ok})
+			// Memory drifts up rather than oscillating, which is what makes a
+			// second column worth the width.
+			m.memSeries[c].Append(metrics.Sample{
+				At: at, Value: mem[name] * (0.8 + 0.4*float64(i)/float64(n)), OK: ok,
 			})
 		}
 	}
-	m.detail[config.ServiceChart("nginx")] = "5 pid · 0.96 cores · 148M"
-	m.detail[config.ServiceChart("postgres")] = "12 pid · 2.72 cores · 1.1G"
-	m.detail[config.ServiceChart("node")] = "3 pid · 4.96 cores · 892M"
+	m.detail[config.ServiceChart("nginx")] = "5 pid · 0.96 cores"
+	m.detail[config.ServiceChart("postgres")] = "12 pid · 2.72 cores"
+	m.detail[config.ServiceChart("node")] = "3 pid · 4.96 cores"
 	m.errmsg[config.ServiceChart("redis-server")] = "no process matching \"redis-server\""
 }
 
@@ -690,4 +697,95 @@ func visualColumnOf(line, needle string) int {
 		return -1
 	}
 	return width(plain[:at])
+}
+
+// countRules is how many vertical rules each grid line carries, keyed by the
+// count. The prompt box draws rules of its own, so the walk stops at its border.
+func countRules(view string) map[int]int {
+	out := map[int]int{}
+	for _, line := range strings.Split(view, "\n") {
+		plain := ansiPattern.ReplaceAllString(line, "")
+		if strings.Contains(plain, "╭") {
+			break
+		}
+		if n := strings.Count(plain, "│"); n > 0 {
+			out[n]++
+		}
+	}
+	return out
+}
+
+// TestServicesScreenSplitsChartArea pins the service row's two chart columns:
+// CPU keeps the left one, memory takes the right, and each chart line therefore
+// carries two rules — the information block's and the gutter's — where a main
+// screen row carries one.
+func TestServicesScreenSplitsChartArea(t *testing.T) {
+	m := newSized(t, 132, 40)
+	seed(m, 400)
+	seedServices(m, 300)
+
+	if got := countRules(m.View()); got[2] > 0 {
+		t.Errorf("main screen rows are split too: %v", got)
+	}
+
+	m.screen = config.ScreenServices
+	l := m.resolveLayout(130, 34, m.cfg.Snapshot().SectionsFor(m.screen), 4)
+	if l.memW <= 0 {
+		t.Fatalf("services screen did not split its chart area: %+v", l)
+	}
+	if got, want := l.chartW+gutterWidth+l.memW, 130-l.infoW; got != want {
+		t.Errorf("columns span %d cells, the chart area is %d", got, want)
+	}
+
+	view := m.View()
+	if got := countRules(view); got[1] > 0 || got[2] == 0 {
+		t.Errorf("service rows do not all carry both rules: %v", got)
+	}
+	plain := ansiPattern.ReplaceAllString(view, "")
+	if !regexp.MustCompile(`mem [0-9]`).MatchString(plain) {
+		t.Error("the information block does not report the memory column's value")
+	}
+}
+
+// TestServicesScreenFitsTerminal covers the sizes the split has to survive,
+// including the narrow ones where the memory column is dropped rather than both
+// timelines squeezed into noise.
+func TestServicesScreenFitsTerminal(t *testing.T) {
+	for _, size := range []struct{ w, h int }{
+		{200, 60}, {132, 40}, {100, 24}, {80, 24}, {74, 20}, {60, 18}, {40, 14}, {34, 13},
+	} {
+		m := newSized(t, size.w, size.h)
+		seed(m, 400)
+		seedServices(m, 300)
+		m.screen = config.ScreenServices
+
+		out := m.View()
+		lines := strings.Split(out, "\n")
+		if len(lines) > size.h {
+			t.Errorf("%dx%d: view is %d lines, terminal has %d", size.w, size.h, len(lines), size.h)
+		}
+		for i, l := range lines {
+			if w := width(l); w > size.w {
+				t.Errorf("%dx%d: line %d is %d cells wide", size.w, size.h, i, w)
+			}
+		}
+	}
+
+	// Too narrow to split, the row keeps the single CPU chart.
+	m := newSized(t, 44, 20)
+	m.screen = config.ScreenServices
+	seedServices(m, 50)
+	if l := m.resolveLayout(42, 14, m.cfg.Snapshot().SectionsFor(m.screen), 4); l.memW != 0 {
+		t.Errorf("a %d-cell chart area was split into %d + %d", 42-l.infoW, l.chartW, l.memW)
+	}
+}
+
+func TestDumpServicesScreenNarrow(t *testing.T) {
+	for _, size := range [][2]int{{100, 24}, {74, 20}, {60, 18}} {
+		m := newSized(t, size[0], size[1])
+		seed(m, 400)
+		seedServices(m, 300)
+		m.screen = config.ScreenServices
+		t.Logf("%dx%d\n%s", size[0], size[1], m.View())
+	}
 }
