@@ -20,9 +20,12 @@ type (
 	checkTickMsg   struct{ epoch int }
 	svcTickMsg     struct{ epoch int }
 	sysResultMsg   struct{ snap metrics.SystemSnapshot }
-	probeResultMsg struct{ results []probe.Result }
-	svcResultMsg   struct{ samples []metrics.ServiceSample }
-	discoverMsg    struct {
+	probeResultMsg struct {
+		results []probe.Result
+		edge    *probe.Edge
+	}
+	svcResultMsg struct{ samples []metrics.ServiceSample }
+	discoverMsg  struct {
 		candidates []metrics.Candidate
 		err        error
 	}
@@ -99,6 +102,15 @@ type Model struct {
 	manageSel selection
 
 	paused bool
+
+	// edgeRule is the newest rule timestamp any edge has reported for the
+	// target. The first one only sets the baseline: its age says nothing about
+	// propagation, since the change may predate the dashboard by weeks.
+	edgeRule time.Time
+	// edgeOrch is the propagation time, in milliseconds, of the last rule change
+	// seen while monitoring, valid once hasOrch is set.
+	edgeOrch float64
+	hasOrch  bool
 
 	// epochs invalidate timers that were superseded by an interval change.
 	sysEpoch   int
@@ -304,8 +316,8 @@ func (m *Model) runChecks() tea.Cmd {
 		m.inflight[config.TTFB] = true
 		m.inflight[config.Request] = true
 		cmds = append(cmds, func() tea.Msg {
-			ttfb, total := p.HTTP(context.Background(), snap)
-			return probeResultMsg{results: []probe.Result{ttfb, total}}
+			ttfb, total, edge := p.HTTP(context.Background(), snap)
+			return probeResultMsg{results: []probe.Result{ttfb, total}, edge: &edge}
 		})
 	}
 	if len(cmds) == 0 {
@@ -323,6 +335,11 @@ func (m *Model) resetProbeSeries() {
 		m.detail[c] = ""
 		m.errmsg[c] = ""
 	}
+	c := config.MetricChart(config.Edge)
+	m.series[c].Reset()
+	m.detail[c] = ""
+	m.errmsg[c] = ""
+	m.edgeRule, m.edgeOrch, m.hasOrch = time.Time{}, 0, false
 }
 
 // --- update ---------------------------------------------------------------
@@ -360,6 +377,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probeResultMsg:
 		for _, r := range msg.results {
 			m.applyProbe(r)
+		}
+		if msg.edge != nil {
+			m.applyEdge(*msg.edge)
 		}
 		return m, nil
 
@@ -492,6 +512,37 @@ func (m *Model) applyProbe(r probe.Result) {
 		return
 	}
 	m.errmsg[c] = r.Detail
+}
+
+// applyEdge records what the edge reported. A sample's Value is the propagation
+// time of a rule change first seen in that response, and zero otherwise.
+//
+// Only a timestamp newer than any seen so far counts as a change: when requests
+// alternate between an updated edge and a lagging one, the lagging one's older
+// timestamp is not a new rule.
+func (m *Model) applyEdge(e probe.Edge) {
+	c := config.MetricChart(config.Edge)
+	if !e.OK {
+		m.errmsg[c] = e.Detail
+		m.series[c].Append(metrics.Sample{At: e.At, OK: false})
+		return
+	}
+	var orch float64
+	if e.RuleModified.After(m.edgeRule) {
+		if !m.edgeRule.IsZero() {
+			orch = metrics.Millis(e.At.UTC().Sub(e.RuleModified.UTC()))
+			m.edgeOrch, m.hasOrch = orch, true
+		}
+		m.edgeRule = e.RuleModified
+	}
+	m.errmsg[c] = ""
+	m.detail[c] = ""
+	if !m.edgeRule.IsZero() {
+		m.detail[c] = "rules " + m.edgeRule.UTC().Format("01-02 15:04:05") + " UTC"
+	} else if e.LocPop() == "" {
+		m.detail[c] = "no azion debug headers"
+	}
+	m.series[c].Append(metrics.Sample{At: e.At, Value: orch, OK: true, Code: e.Status, Label: e.LocPop()})
 }
 
 // --- keyboard -------------------------------------------------------------

@@ -294,7 +294,7 @@ func TestDumpPicker(t *testing.T) {
 // however short the terminal is: a picker that hides the row you came to unhide
 // would be a trap.
 func TestPickerFitsShortTerminal(t *testing.T) {
-	for _, h := range []int{16, 20, 26, 44} {
+	for _, h := range []int{17, 20, 26, 44} {
 		m := newSized(t, 60, h)
 		m.picker = true
 		out := m.View()

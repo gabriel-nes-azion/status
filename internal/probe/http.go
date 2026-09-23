@@ -17,15 +17,15 @@ import (
 
 const userAgent = "status-tui/1.0 (+terminal monitor)"
 
-// HTTP performs one request against the target and returns both the TTFB and
-// the full request-time results. A single request feeds both panels so the two
-// numbers always describe the same transaction, and keep-alive is disabled so
+// HTTP performs one request against the target and returns the TTFB, the full
+// request-time and the edge results. A single request feeds all three panels so
+// they always describe the same transaction, and keep-alive is disabled so
 // every check pays a fresh DNS/TCP/TLS cost and the samples stay comparable.
 //
 // The two configured timeouts map onto distinct phases: the TTFB timeout bounds
 // the wait for response headers, the request timeout bounds the whole exchange
 // including the body.
-func (p *Prober) HTTP(ctx context.Context, cfg config.Settings) (ttfb Result, total Result) {
+func (p *Prober) HTTP(ctx context.Context, cfg config.Settings) (ttfb Result, total Result, edge Edge) {
 	reqTimeout := cfg.Timeout(config.Request)
 	ttfbTimeout := cfg.Timeout(config.TTFB)
 
@@ -77,17 +77,19 @@ func (p *Prober) HTTP(ctx context.Context, cfg config.Settings) (ttfb Result, to
 
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodGet, cfg.URL(), nil)
 	if err != nil {
-		return fail(config.TTFB, err), fail(config.Request, err)
+		return fail(config.TTFB, err), fail(config.Request, err), edgeFail(err)
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", edgeDebugPragma)
 
 	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
-		return fail(config.TTFB, err), fail(config.Request, err)
+		return fail(config.TTFB, err), fail(config.Request, err), edgeFail(err)
 	}
 	defer resp.Body.Close()
+	edge = edgeFromResponse(resp, time.Now())
 
 	n, readErr := io.Copy(io.Discard, resp.Body)
 	elapsed := time.Since(start)
@@ -103,7 +105,7 @@ func (p *Prober) HTTP(ctx context.Context, cfg config.Settings) (ttfb Result, to
 
 	if readErr != nil {
 		total = fail(config.Request, readErr)
-		return ttfb, total
+		return ttfb, total, edge
 	}
 
 	detail := fmt.Sprintf("%d · %s · %s", resp.StatusCode, resp.Proto, metrics.FormatBytes(float64(n)))
@@ -121,5 +123,5 @@ func (p *Prober) HTTP(ctx context.Context, cfg config.Settings) (ttfb Result, to
 		ttfb.OK = false
 		ttfb.Err = total.Err
 	}
-	return ttfb, total
+	return ttfb, total, edge
 }

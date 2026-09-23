@@ -29,6 +29,9 @@ const (
 	Ping    Metric = "ping"
 	TTFB    Metric = "ttfb"
 	Request Metric = "request"
+	// Edge is the Azion edge answering the TTFB request: which one, with what
+	// status, and how long rule changes take to reach it.
+	Edge Metric = "edge"
 )
 
 // Screen is one page of the dashboard. Charts are split across screens because
@@ -102,15 +105,17 @@ func (c ChartID) Metric() (Metric, bool) {
 	return "", false
 }
 
-// MachineMetrics and NetworkMetrics are the built-in charts of the main screen,
-// split by the question they answer: local pressure versus remote reachability.
+// MachineMetrics, NetworkMetrics and EdgeMetrics are the built-in charts of the
+// main screen, split by the question they answer: local pressure, remote
+// reachability, and what the edge serving the target reports about itself.
 var (
 	MachineMetrics = []Metric{CPU, Mem, Disk, DiskIO}
 	NetworkMetrics = []Metric{Net, Ping, DNS, TTFB, Request}
+	EdgeMetrics    = []Metric{Edge}
 )
 
 // Order is every built-in metric in display order.
-var Order = append(append([]Metric{}, MachineMetrics...), NetworkMetrics...)
+var Order = append(append(append([]Metric{}, MachineMetrics...), NetworkMetrics...), EdgeMetrics...)
 
 // Probes are the network checks driven by the configurable check interval.
 var Probes = []Metric{DNS, Ping, TTFB, Request}
@@ -126,6 +131,7 @@ var Titles = map[Metric]string{
 	Ping:    "PING",
 	TTFB:    "TTFB",
 	Request: "REQUEST",
+	Edge:    "EDGE",
 }
 
 // Section groups charts under a heading on one screen.
@@ -336,6 +342,7 @@ func (s Settings) AllSections(screen Screen) []Section {
 		return []Section{
 			{Name: "Machine", Screen: ScreenMain, Charts: chartsOf(MachineMetrics)},
 			{Name: "Network", Screen: ScreenMain, Charts: chartsOf(NetworkMetrics)},
+			{Name: "Edge", Screen: ScreenMain, Charts: chartsOf(EdgeMetrics)},
 		}
 	}
 }

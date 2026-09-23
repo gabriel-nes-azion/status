@@ -213,6 +213,9 @@ func init() {
 				if err != nil {
 					return "", nil, err
 				}
+				if isEdge(c) {
+					return "", nil, fmt.Errorf("edge has no threshold: its failures already alert")
+				}
 				v, err := parseThreshold(c, args[1])
 				if err != nil {
 					return "", nil, err

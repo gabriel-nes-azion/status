@@ -62,6 +62,8 @@ var descriptors = map[config.Metric]descriptor{
 	config.Ping:    {unit: metrics.UnitMillis, fg: lipgloss.Color("146"), floorMax: 50},
 	config.TTFB:    {unit: metrics.UnitMillis, fg: lipgloss.Color("215"), floorMax: 100},
 	config.Request: {unit: metrics.UnitMillis, fg: lipgloss.Color("211"), floorMax: 200},
+	// Edge's scale is the orchestration latency of rule changes.
+	config.Edge: {unit: metrics.UnitMillis, fg: lipgloss.Color("183"), floorMax: 10000},
 }
 
 // servicePalette colours service charts. A service is picked from it by a hash

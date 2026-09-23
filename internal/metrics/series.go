@@ -8,6 +8,11 @@ type Sample struct {
 	At    time.Time
 	Value float64
 	OK    bool
+	// Code and Label carry categorical readings that a value cannot, such as an
+	// HTTP status and the edge that answered. Charts that do not use them leave
+	// them zero.
+	Code  int
+	Label string
 }
 
 // Series is a fixed-capacity ring buffer of samples ordered oldest to newest.

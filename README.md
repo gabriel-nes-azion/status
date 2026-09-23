@@ -52,7 +52,8 @@ CPU share on the left, resident memory on the right.
 
 ## What it measures
 
-Nine charts, all visible at once, all plotted as timelines, in two sections.
+Ten charts on the main screen, all visible at once, all plotted as timelines, in
+three sections.
 
 **Machine** — local resources:
 
@@ -72,6 +73,14 @@ Nine charts, all visible at once, all plotted as timelines, in two sections.
 | `DNS LOOKUP` | time to resolve the target hostname | see *How the checks work* |
 | `TTFB` | time to the first response byte | |
 | `REQUEST` | time to a fully read response | same request as TTFB |
+
+**Edge** — the Azion edge answering the TTFB request:
+
+| Lane | Source | Notes |
+| --- | --- | --- |
+| `orch` | seconds between a rule change and the check that first saw it | `-` until a change happens while the dashboard is running |
+| loc-pop | `x-azion-edge-location` + `x-azion-edge-pop`, e.g. `IAD-EQN` | labelled where the edge changes |
+| status | HTTP status of the response | coloured by class, labelled where it changes |
 
 **Services** — process groups you pick, on the second screen:
 
@@ -339,6 +348,17 @@ The two timeouts bound different phases: the TTFB timeout bounds the wait for
 response headers, the request timeout bounds the whole exchange including the
 body. An HTTP status of 400 or above counts as a failed check.
 
+**Edge.** The same GET carries `Pragma: azion-debug-cache`, which makes an Azion
+edge report where it runs and when its rules were last modified. The newest of
+`x-ea-rule-last-modified` and `x-ef-rule-last-modified` is the rule timestamp.
+The first one seen only sets the baseline, since that change may be weeks old.
+Each later check whose timestamp is newer than any seen so far is a rule change,
+and its orchestration latency is the machine's UTC clock minus that timestamp,
+so it is only as accurate as the local clock. A timestamp older than the newest
+one seen, from an edge that has not caught up yet, is not a change. `/host`
+restarts the baseline. A 404 still comes from an edge, so only a check with no
+response at all is an outage on this row, and the row has no threshold.
+
 ## Configuration file
 
 TOML, read at startup and written back on exit:
@@ -486,7 +506,7 @@ chart: a services screen with four charts should spend a tall terminal on
 vertical resolution rather than leave a third of it blank.
 
 The minimum size depends on what is on screen, so `/show` is a real way to fit a
-short terminal rather than a dead end: nine charts and two headings need 34x15.
+short terminal rather than a dead end: ten charts and three headings need 34x17.
 Below that the dashboard says so instead of quietly hiding some. The prompt stays
 pinned to the bottom.
 

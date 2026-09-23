@@ -323,7 +323,7 @@ func TestLoopKeepsSampling(t *testing.T) {
 	for _, k := range config.Order {
 		got := m.series[config.MetricChart(k)].Len()
 		want := wantSys
-		if isProbe(k) {
+		if isProbe(k) || k == config.Edge {
 			want = wantCheck
 		}
 		t.Logf("%-8s samples=%d (want >= %d)", k, got, want)

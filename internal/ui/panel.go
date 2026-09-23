@@ -34,6 +34,11 @@ type panel struct {
 	// narrow for two readable timelines keeps the single CPU one.
 	memSeries *metrics.Series
 
+	// edgeOrch and hasOrch are the EDGE row's last propagation time, kept by the
+	// model because it must outlive the samples it came from.
+	edgeOrch float64
+	hasOrch  bool
+
 	rowH   int // total lines in the row, including the chart's blank last line
 	infoW  int // width of the information block; the chart starts at this offset
 	chartW int
@@ -115,6 +120,9 @@ func (p panel) infoText(d descriptor, stats metrics.Stats, max float64, w int) [
 	ih := p.rowH
 	if ih > infoHeight {
 		ih = infoHeight
+	}
+	if isEdge(p.chart) {
+		return p.edgeInfoText(d, stats, max, w, ih)
 	}
 
 	value, valueSty := p.valueText(d)
@@ -224,6 +232,9 @@ func (p panel) detailLines(w int, indent string, n int) []string {
 // row wide enough to split — CPU and memory side by side, divided by the same
 // faint rule that separates the information block from the charts.
 func (p panel) chartColumns(d descriptor, max float64) []string {
+	if isEdge(p.chart) {
+		return p.edgeLanes(d, max)
+	}
 	rows := p.chartAt(d, p.chartW, p.chartH, max)
 	if !p.split() {
 		return rows

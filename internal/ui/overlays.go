@@ -69,7 +69,7 @@ func helpOverlay() []string {
 		"  "+styDim.Render("/config shows the file in use; run with --conf <file> to pick another."),
 		"",
 		section("reading it"),
-		"  "+styDim.Render("two screens: MACHINE and NETWORK on the main one, SERVICES on the second."),
+		"  "+styDim.Render("two screens: MACHINE, NETWORK and EDGE on the main one, SERVICES on the second."),
 		"  "+styDim.Render("every chart keeps collecting on both, so switching never loses history."),
 		"  "+styDim.Render("one row per chart: the numbers up to column 30, the timeline after it."),
 		"  "+styDim.Render("time flows left to right; the rightmost column is the newest sample."),

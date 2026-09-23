@@ -252,14 +252,14 @@ func ScreenOfHelper(s Settings, c ChartID) Screen { return s.ScreenOf(c) }
 
 func TestSectionsForDropsEmptyGroups(t *testing.T) {
 	s := DefaultSettings()
-	if got := len(s.SectionsFor(ScreenMain)); got != 2 {
-		t.Fatalf("main screen has %d sections, want 2", got)
+	if got := len(s.SectionsFor(ScreenMain)); got != 3 {
+		t.Fatalf("main screen has %d sections, want 3", got)
 	}
 	if got := s.SectionsFor(ScreenServices); len(got) != 0 {
 		t.Errorf("no services configured should yield no sections, got %+v", got)
 	}
 
-	for _, m := range MachineMetrics {
+	for _, m := range append(append([]Metric{}, MachineMetrics...), EdgeMetrics...) {
 		s.Shown[MetricChart(m)] = false
 	}
 	secs := s.SectionsFor(ScreenMain)

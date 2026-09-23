@@ -276,6 +276,9 @@ func (m *Model) renderPanel(c config.ChartID, l layout, snap config.Settings) st
 	if c.IsService() {
 		p.memSeries, p.memW = m.memSeries[c], l.memW
 	}
+	if isEdge(c) {
+		p.edgeOrch, p.hasOrch = m.edgeOrch, m.hasOrch
+	}
 	return p.render()
 }
 
